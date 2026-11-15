@@ -40,10 +40,19 @@ type ExecResult struct {
 	Output   []byte
 }
 
+// PruneReport summarizes what a system prune removed.
+type PruneReport struct {
+	ContainersDeleted int
+	ImagesDeleted     int
+	NetworksDeleted   int
+	SpaceReclaimed    uint64
+}
+
 // Container is the subset of a Docker container the bot uses.
 type Container interface {
 	ID() string
 	Name() string
+	ImageID(ctx context.Context) (string, error)
 	Status(ctx context.Context) (string, error)
 	Start(ctx context.Context) error
 	Stop(ctx context.Context, timeoutSeconds int) error
@@ -59,4 +68,7 @@ type Container interface {
 type API interface {
 	GetContainer(ctx context.Context, ref string) (Container, error)
 	RunContainer(ctx context.Context, options RunOptions) (Container, error)
+	ImageID(ctx context.Context, ref string) (string, error)
+	PullImage(ctx context.Context, ref string) (string, error)
+	PruneSystem(ctx context.Context) (PruneReport, error)
 }

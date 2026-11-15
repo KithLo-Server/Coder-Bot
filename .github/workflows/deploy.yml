@@ -72,12 +72,13 @@ jobs:
         shell: bash
         run: docker compose up -d --build --remove-orphans
 
-      - name: Pull child images into the base daemon
+      - name: Pull missing child images into the base daemon
         shell: bash
         run: |
           set -euo pipefail
-          docker compose exec -T opencode docker pull ghcr.io/kithlo-server/coder-worker:latest
-          docker compose exec -T opencode docker pull ghcr.io/kithlo-server/coder-shell:latest
+          for image in ghcr.io/kithlo-server/coder-worker:latest ghcr.io/kithlo-server/coder-shell:latest; do
+            docker compose exec -T opencode sh -c "docker image inspect '$image' >/dev/null 2>&1 || docker pull '$image'"
+          done
 
       - name: Show container status
         if: always()

@@ -3,11 +3,14 @@ package docker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
@@ -54,8 +57,8 @@ func (sdk *SDK) RunContainer(ctx context.Context, options RunOptions) (Container
 		}
 		binds = append(binds, volume.Source+":"+volume.Target+":"+mode)
 	}
-	if _, _, err := sdk.client.ImageInspectWithRaw(ctx, options.Image); err != nil {
-		if !errdefs.IsNotFound(err) {
+	if _, err := sdk.ImageID(ctx, options.Image); err != nil {
+		if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
 		pull, err := sdk.client.ImagePull(ctx, options.Image, image.PullOptions{})
@@ -88,6 +91,61 @@ func (sdk *SDK) RunContainer(ctx context.Context, options RunOptions) (Container
 	return &sdkContainer{client: sdk.client, id: created.ID, name: options.Name}, nil
 }
 
+// ImageID returns the local ID of an image, or ErrNotFound if it is absent.
+func (sdk *SDK) ImageID(ctx context.Context, ref string) (string, error) {
+	info, _, err := sdk.client.ImageInspectWithRaw(ctx, ref)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return info.ID, nil
+}
+
+// PullImage pulls an image and returns its resulting local ID.
+func (sdk *SDK) PullImage(ctx context.Context, ref string) (string, error) {
+	pull, err := sdk.client.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return "", err
+	}
+	defer pull.Close()
+	if _, err := io.Copy(io.Discard, pull); err != nil {
+		return "", err
+	}
+	return sdk.ImageID(ctx, ref)
+}
+
+// PruneSystem removes unused containers, images, networks and build cache.
+func (sdk *SDK) PruneSystem(ctx context.Context) (PruneReport, error) {
+	var report PruneReport
+
+	containers, err := sdk.client.ContainersPrune(ctx, filters.Args{})
+	if err != nil {
+		return report, err
+	}
+	report.ContainersDeleted = len(containers.ContainersDeleted)
+	report.SpaceReclaimed += containers.SpaceReclaimed
+
+	images, err := sdk.client.ImagesPrune(ctx, filters.NewArgs(filters.Arg("dangling", "false")))
+	if err != nil {
+		return report, err
+	}
+	report.ImagesDeleted = len(images.ImagesDeleted)
+	report.SpaceReclaimed += images.SpaceReclaimed
+
+	networks, err := sdk.client.NetworksPrune(ctx, filters.Args{})
+	if err != nil {
+		return report, err
+	}
+	report.NetworksDeleted = len(networks.NetworksDeleted)
+
+	if _, err := sdk.client.BuildCachePrune(ctx, build.CachePruneOptions{All: true}); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
 type sdkContainer struct {
 	client *client.Client
 	id     string
@@ -96,6 +154,17 @@ type sdkContainer struct {
 
 func (c *sdkContainer) ID() string   { return c.id }
 func (c *sdkContainer) Name() string { return c.name }
+
+func (c *sdkContainer) ImageID(ctx context.Context) (string, error) {
+	info, err := c.client.ContainerInspect(ctx, c.id)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return info.Image, nil
+}
 
 func (c *sdkContainer) Status(ctx context.Context) (string, error) {
 	info, err := c.client.ContainerInspect(ctx, c.id)

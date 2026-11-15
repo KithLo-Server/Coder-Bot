@@ -33,6 +33,8 @@ func New() *Container { return &Container{} }
 func (c *Container) ID() string   { return ContainerID }
 func (c *Container) Name() string { return ContainerName }
 
+func (c *Container) ImageID(context.Context) (string, error) { return ContainerID, nil }
+
 func (c *Container) Status(context.Context) (string, error) { return "running", nil }
 
 func (c *Container) Start(context.Context) error { return nil }

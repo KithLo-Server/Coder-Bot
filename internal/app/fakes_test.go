@@ -127,10 +127,17 @@ type fakeDocker struct {
 	containers map[string]*fakeContainer
 	runCalls   []docker.RunOptions
 	runErr     error
+	images     map[string]string
+	pullImages map[string]string
+	pullErr    error
+	pullCalls  []string
+	pruneCalls int
+	prune      docker.PruneReport
+	pruneErr   error
 }
 
 func newFakeDocker() *fakeDocker {
-	return &fakeDocker{nextID: 0, containers: make(map[string]*fakeContainer)}
+	return &fakeDocker{nextID: 0, containers: make(map[string]*fakeContainer), images: make(map[string]string), pullImages: make(map[string]string)}
 }
 
 func (f *fakeDocker) add(container *fakeContainer) *fakeContainer {
@@ -163,10 +170,47 @@ func (f *fakeDocker) RunContainer(_ context.Context, options docker.RunOptions) 
 		return nil, f.runErr
 	}
 	f.nextID++
-	container := &fakeContainer{id: fmt.Sprintf("new-%d", f.nextID), name: options.Name, status: "running", archives: make(map[string][]byte)}
+	container := &fakeContainer{id: fmt.Sprintf("new-%d", f.nextID), name: options.Name, status: "running", imageID: options.Image, archives: make(map[string][]byte)}
+	if imageID, ok := f.images[options.Image]; ok {
+		container.imageID = imageID
+	}
 	f.containers[container.id] = container
 	f.containers[container.name] = container
 	return container, nil
+}
+
+func (f *fakeDocker) ImageID(_ context.Context, ref string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id, ok := f.images[ref]; ok {
+		return id, nil
+	}
+	return "", docker.ErrNotFound
+}
+
+func (f *fakeDocker) PullImage(_ context.Context, ref string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pullCalls = append(f.pullCalls, ref)
+	if f.pullErr != nil {
+		return "", f.pullErr
+	}
+	id := f.images[ref]
+	if updated, ok := f.pullImages[ref]; ok {
+		id = updated
+	}
+	if id == "" {
+		id = ref + ":pulled"
+	}
+	f.images[ref] = id
+	return id, nil
+}
+
+func (f *fakeDocker) PruneSystem(context.Context) (docker.PruneReport, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pruneCalls++
+	return f.prune, f.pruneErr
 }
 
 type fakeContainer struct {
@@ -174,6 +218,7 @@ type fakeContainer struct {
 	id        string
 	name      string
 	status    string
+	imageID   string
 	execFunc  func(docker.ExecOptions) (docker.ExecResult, error)
 	stream    io.ReadCloser
 	archives  map[string][]byte
@@ -187,6 +232,12 @@ type fakeContainer struct {
 
 func (c *fakeContainer) ID() string   { return c.id }
 func (c *fakeContainer) Name() string { return c.name }
+
+func (c *fakeContainer) ImageID(context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.imageID, nil
+}
 
 func (c *fakeContainer) Status(context.Context) (string, error) {
 	c.mu.Lock()
@@ -308,8 +359,8 @@ func newTestEnv(t *testing.T) *testEnv {
 }
 
 func (e *testEnv) addRepo(name string) *fakeContainer {
-	container := e.docker.add(&fakeContainer{id: "worker-" + name, name: workerContainerName(name), status: "running", archives: make(map[string][]byte)})
-	shell := e.docker.add(&fakeContainer{id: "shell-" + name, name: shellContainerName(name), status: "running", archives: make(map[string][]byte)})
+	container := e.docker.add(&fakeContainer{id: "worker-" + name, name: workerContainerName(name), status: "running", imageID: e.docker.images[config.WorkerImage], archives: make(map[string][]byte)})
+	shell := e.docker.add(&fakeContainer{id: "shell-" + name, name: shellContainerName(name), status: "running", imageID: e.docker.images[config.ShellImage], archives: make(map[string][]byte)})
 	e.app.SetRepo(name, &state.Repo{
 		URL:              "https://example.com/" + name,
 		ContainerID:      container.id,

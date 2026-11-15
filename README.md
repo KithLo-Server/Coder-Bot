@@ -163,6 +163,7 @@ The worker and shell images are fixed:
 | `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously deleted repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). |
 | `/reload <name>` | Recreate the worker and shell, refresh the checkout with a fast-forward pull in the base, and reset its OpenCode sessions. |
 | `/reloadall` | Recreate the containers and refresh the checkout of every repository, resetting their OpenCode sessions. |
+| `/upgrade` | Pull the latest worker and shell images, replace containers still running older images (resetting their OpenCode sessions), then prune unused old images. |
 | `/dl <path>` | Download a file or a compressed directory (up to 50 MB) from the active checkout in the shell container. |
 | `/ul <path>` | Upload an attached file to a destination in the active checkout through the shell container. |
 | `/sh <command>` | Run a cancellable shell command in the active repository's shell container. |
@@ -247,7 +248,7 @@ go vet ./...
 ## Deployment
 
 - **Bot** — `.github/workflows/deploy.yml` deploys on pushes to `master` (and via manual dispatch) using a self-hosted runner. It validates that every `${VAR}` referenced by `docker-compose.yml` is set, then runs `docker compose up -d --build --remove-orphans`.
-- **Worker and shell images** — `ghcr.io/kithlo-server/coder-worker:latest` and `ghcr.io/kithlo-server/coder-shell:latest`; the bot pulls them into the base's inner Docker daemon on demand. The deployment workflow can pre-pull them inside the base to shorten the first run.
+- **Worker and shell images** — `ghcr.io/kithlo-server/coder-worker:latest` and `ghcr.io/kithlo-server/coder-shell:latest`; the bot pulls them into the base's inner Docker daemon on demand. The deployment workflow only pre-pulls images that are missing. Run `/upgrade` to pull newer versions, replace containers still on older images, and prune unused old images.
 
 Secrets and variables are supplied through GitHub Actions secrets/variables, not committed to the repository.
 
@@ -258,6 +259,7 @@ Secrets and variables are supplied through GitHub Actions secrets/variables, not
 - Worker and shell containers are long-lived and named `opencode_<repo>` and `opencode_shell_<repo>`; deleting a repository removes both.
 - Worker containers receive provider credentials. Shell containers receive only Git/SSH configuration and no OpenCode or provider tokens.
 - Set `TELEGRAM_ALLOWED_USER_ID` to restrict access. Leaving it unset allows any Telegram user who finds the bot to use it.
+- `/upgrade` runs a system prune in the base's inner Docker daemon, so unrelated unused images there are removed as well.
 - API keys, the Vertex service-account JSON, and the SSH signing key are passed through environment variables. The SSH key is written into the base and child containers at startup; no credential file is stored on the host.
 - Repository files are untrusted input. Base commands operate on `/repos`, worker/shell commands operate on their mounted checkout, and `/upload` is read-only inside child containers.
 - Inner Docker images and container metadata persist in `${OPENCODE_DATA}/docker`. Back up that directory alongside repositories and uploads if you need to preserve them.

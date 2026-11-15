@@ -33,6 +33,7 @@ func init() {
 		"purge":     (*App).CmdPurge,
 		"reload":    (*App).CmdReload,
 		"reloadall": (*App).CmdReloadAll,
+		"upgrade":   (*App).CmdUpgrade,
 		"dl":        (*App).CmdDL,
 		"ul":        (*App).CmdUL,
 		"sh":        (*App).CmdSh,
