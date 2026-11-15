@@ -1,0 +1,48 @@
+name: opencode
+
+services:
+  opencode:
+    image: opencode
+    container_name: opencode
+    restart: unless-stopped
+    pull_policy: never
+    build:
+      context: .
+    environment:
+      - "TELEGRAM_BOT_TOKEN=${OPENCODE_BOT_TOKEN}"
+      - "TELEGRAM_API_BASE_URL=http://telegram_bot_api_server:8081/bot"
+      - "TELEGRAM_API_FILE_BASE_URL=http://telegram_bot_api_server:8081/file/bot"
+      - "ALLOWED_USER_ID=${OPENCODE_ALLOWED_USER_ID}"
+      - "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}"
+      - "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}"
+      - "OPENCODE_MODELS=${OPENCODE_MODELS:-}"
+      - "GOOGLE_VERTEX_PROJECT=${GOOGLE_VERTEX_PROJECT:-}"
+      - "GOOGLE_VERTEX_LOCATION=${GOOGLE_VERTEX_LOCATION:-global}"
+      - "GOOGLE_APPLICATION_CREDENTIALS_JSON=${GOOGLE_APPLICATION_CREDENTIALS_JSON:-}"
+      - "HOST_REPOS_DIR=${OPENCODE_DATA}/repos"
+      - "OPENCODE_SSH_KEY=${OPENCODE_SSH_KEY}"
+      - "GIT_USER_NAME=${GIT_USER_NAME}"
+      - "GIT_USER_EMAIL=${GIT_USER_EMAIL}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${OPENCODE_DATA}/data:/app/data"
+      - "${TELEGRAM_BOT_API_DATA}:/var/lib/telegram-bot-api:ro"
+    networks:
+      telegram_bot:
+
+  opencode_shell:
+    image: ghcr.io/kithlo-server/coder-shell:latest
+    container_name: opencode_shell
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      - "OPENCODE_SSH_KEY=${OPENCODE_SSH_KEY}"
+      - "GIT_USER_NAME=${GIT_USER_NAME}"
+      - "GIT_USER_EMAIL=${GIT_USER_EMAIL}"
+    volumes:
+      - "${OPENCODE_DATA}/repos:/workspace"
+
+networks:
+  telegram_bot:
+    name: telegram_bot
+    external: true
