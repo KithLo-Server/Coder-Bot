@@ -129,7 +129,7 @@ func (a *App) repoVolumes(name string) []docker.Volume {
 		},
 		{
 			Source: a.Cfg.UploadsDir,
-			Target: config.UploadDir,
+			Target: a.Cfg.UploadsDir,
 			Mode:   "ro",
 		},
 	}
@@ -227,6 +227,7 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 	worker, shell, err := a.ensureRepoContainers(ctx, name)
 	if err != nil {
 		a.Logger.Printf("Error creating containers: %v", err)
+		a.removeRepoContainers(ctx, name, nil)
 		a.editStatus(ctx, status, fmt.Sprintf("Error during setup: `%v`", err))
 		return false, false
 	}
