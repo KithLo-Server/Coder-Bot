@@ -197,9 +197,11 @@ func (c *sdkContainer) Restart(ctx context.Context, timeoutSeconds int) error {
 
 func (c *sdkContainer) Exec(ctx context.Context, options ExecOptions) (ExecResult, error) {
 	created, err := c.client.ContainerExecCreate(ctx, c.id, container.ExecOptions{
-		Cmd:        options.Cmd,
-		WorkingDir: options.Workdir,
-		Env:        envSlice(options.Env),
+		Cmd:          options.Cmd,
+		WorkingDir:   options.Workdir,
+		Env:          envSlice(options.Env),
+		AttachStdout: true,
+		AttachStderr: true,
 	})
 	if err != nil {
 		return ExecResult{}, err
@@ -212,8 +214,7 @@ func (c *sdkContainer) Exec(ctx context.Context, options ExecOptions) (ExecResul
 
 	var stdout, stderr bytes.Buffer
 	if _, err := stdcopy.StdCopy(&stdout, &stderr, attached.Reader); err != nil {
-		// A raw (non-multiplexed) stream is returned as-is.
-		return ExecResult{Output: append(stdout.Bytes(), stderr.Bytes()...)}, nil
+		return ExecResult{}, err
 	}
 	inspect, err := c.client.ContainerExecInspect(ctx, created.ID)
 	if err != nil {
@@ -224,9 +225,11 @@ func (c *sdkContainer) Exec(ctx context.Context, options ExecOptions) (ExecResul
 
 func (c *sdkContainer) ExecStream(ctx context.Context, options ExecOptions) (io.ReadCloser, error) {
 	created, err := c.client.ContainerExecCreate(ctx, c.id, container.ExecOptions{
-		Cmd:        options.Cmd,
-		WorkingDir: options.Workdir,
-		Env:        envSlice(options.Env),
+		Cmd:          options.Cmd,
+		WorkingDir:   options.Workdir,
+		Env:          envSlice(options.Env),
+		AttachStdout: true,
+		AttachStderr: true,
 	})
 	if err != nil {
 		return nil, err
