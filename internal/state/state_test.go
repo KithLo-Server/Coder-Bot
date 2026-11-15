@@ -110,3 +110,22 @@ func TestLoadNormalizesModelMountsAndContext(t *testing.T) {
 		t.Fatal("invalid chat key accepted")
 	}
 }
+
+func TestLoadVersion3PreservesModelAndClearsContainerIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	raw := `{"version":3,"repos":{"r":{"url":"u","container_id":"c","shell_container_id":"s","model":"m1","variant":"high"}},"command_sets":{},"active_context":{}}`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, catalog(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := loaded.Repos.Get("r")
+	if repo.Model != "m1" || repo.Variant == nil || *repo.Variant != "high" {
+		t.Fatalf("model selection not preserved: %+v", repo)
+	}
+	if repo.ContainerID != "" || repo.ShellContainerID != "" {
+		t.Fatalf("container ids not cleared: %+v", repo)
+	}
+}
