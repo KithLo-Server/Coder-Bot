@@ -311,16 +311,12 @@ func RestartContainer(ctx context.Context, container docker.Container) error {
 	return container.Restart(ctx, 1)
 }
 
-// ResolveBasePath resolves a user path against the active repository on the base
-// container.
-func (a *App) ResolveBasePath(rawPath, repoName string) string {
+// ResolveShellPath resolves a user path against the active repository's
+// checkout in the shell container.
+func (a *App) ResolveShellPath(rawPath string) string {
 	rawPath = strings.TrimSpace(rawPath)
 	if !strings.HasPrefix(rawPath, "/") {
-		base := a.Cfg.ReposDir
-		if repoName != "" {
-			base = a.repoBasePath(repoName)
-		}
-		rawPath = base + "/" + rawPath
+		rawPath = config.WorkspaceDir + "/" + rawPath
 	}
 	return path.Clean(strings.ReplaceAll(rawPath, "\\", "/"))
 }

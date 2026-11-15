@@ -50,7 +50,8 @@ func TestRouterCaptionULStopsPhotoHandling(t *testing.T) {
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
 	env.tg.files["doc"] = []byte("data")
-	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	shell := env.repoShell("repo")
+	shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{ExitCode: 1}, nil
 		}
@@ -62,8 +63,8 @@ func TestRouterCaptionULStopsPhotoHandling(t *testing.T) {
 		Photo:    []telegram.PhotoSize{{FileID: "doc"}},
 	}}
 	env.app.Handle(env.ctx, update)
-	if len(env.base.putPaths) != 1 {
-		t.Fatalf("expected upload, putPaths = %+v", env.base.putPaths)
+	if len(shell.putPaths) != 1 {
+		t.Fatalf("expected upload, putPaths = %+v", shell.putPaths)
 	}
 }
 

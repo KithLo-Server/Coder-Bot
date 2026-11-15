@@ -920,10 +920,10 @@ func uploadPathFromMessage(message *telegram.Message, args []string) string {
 	return strings.TrimSpace(strings.Join(args, " "))
 }
 
-func (a *App) resolveUploadTarget(rawPath, existingKind, originalName, repoName string) (string, string, string) {
+func (a *App) resolveUploadTarget(rawPath, existingKind, originalName string) (string, string, string) {
 	trimmed := strings.TrimSpace(rawPath)
 	wantsDirectory := strings.HasSuffix(trimmed, "/") || strings.HasSuffix(trimmed, "\\")
-	resolved := a.ResolveBasePath(trimmed, repoName)
+	resolved := a.ResolveShellPath(trimmed)
 	if wantsDirectory && existingKind == "file" {
 		return "", "", fmt.Sprintf("`%s` exists and is not a directory.", resolved)
 	}
@@ -954,7 +954,7 @@ func (a *App) CmdUL(ctx context.Context, update *telegram.Update, args []string)
 		return err
 	}
 	if rawPath == "" {
-		_, err := a.replyMarkdown(ctx, update, "Usage: `/ul {path}` (absolute or relative to the active repo)")
+		_, err := a.replyMarkdown(ctx, update, "Usage: `/ul {path}` (absolute or relative to /workspace)")
 		return err
 	}
 	chatID, _ := messageTarget(update)
@@ -968,23 +968,27 @@ func (a *App) CmdUL(ctx context.Context, update *telegram.Update, args []string)
 		return err
 	}
 	defer release()
-	baseContainer := a.BaseContainer()
 	status, err := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Preparing upload to `%s`...", name))
 	if err != nil {
 		return err
 	}
-	resolved := a.ResolveBasePath(rawPath, name)
-	kind, err := DescribeContainerPath(lockCtx, baseContainer, resolved)
+	shell, err := a.GetShellContainer(lockCtx, name)
+	if err != nil || shell == nil {
+		a.editStatus(lockCtx, status, fmt.Sprintf("Shell container for `%s` is not available.", name))
+		return nil
+	}
+	resolved := a.ResolveShellPath(rawPath)
+	kind, err := DescribeContainerPath(lockCtx, shell, resolved)
 	if err != nil {
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
-	targetDir, filename, problem := a.resolveUploadTarget(rawPath, kind, originalName, name)
+	targetDir, filename, problem := a.resolveUploadTarget(rawPath, kind, originalName)
 	if problem != "" {
 		a.editStatus(lockCtx, status, problem)
 		return nil
 	}
-	if err := EnsureContainerDirectory(lockCtx, baseContainer, targetDir); err != nil {
+	if err := EnsureContainerDirectory(lockCtx, shell, targetDir); err != nil {
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
@@ -993,7 +997,7 @@ func (a *App) CmdUL(ctx context.Context, update *telegram.Update, args []string)
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
-	if err := CopyToContainer(lockCtx, baseContainer, data, filename, targetDir); err != nil {
+	if err := CopyToContainer(lockCtx, shell, data, filename, targetDir); err != nil {
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
@@ -1019,7 +1023,7 @@ func (a *App) CmdDL(ctx context.Context, update *telegram.Update, args []string)
 		return nil
 	}
 	if len(args) == 0 {
-		_, err := a.replyMarkdown(ctx, update, "Usage: `/dl {path}` (absolute or relative to the active repo)")
+		_, err := a.replyMarkdown(ctx, update, "Usage: `/dl {path}` (absolute or relative to /workspace)")
 		return err
 	}
 	rawPath := strings.TrimSpace(strings.Join(args, " "))
@@ -1034,10 +1038,14 @@ func (a *App) CmdDL(ctx context.Context, update *telegram.Update, args []string)
 		return err
 	}
 	defer release()
-	baseContainer := a.BaseContainer()
-	filePath := a.ResolveBasePath(rawPath, name)
+	shell, err := a.GetShellContainer(lockCtx, name)
+	if err != nil || shell == nil {
+		_, replyErr := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Shell container for `%s` is not available.", name))
+		return replyErr
+	}
+	filePath := a.ResolveShellPath(rawPath)
 	_ = a.Telegram.SendChatAction(lockCtx, chatID, "upload_document")
-	kind, err := DescribeContainerPath(lockCtx, baseContainer, filePath)
+	kind, err := DescribeContainerPath(lockCtx, shell, filePath)
 	if err != nil {
 		_, err := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Could not inspect `%s`: `%v`", filePath, err))
 		return err
@@ -1053,7 +1061,7 @@ func (a *App) CmdDL(ctx context.Context, update *telegram.Update, args []string)
 	var payload []byte
 	var downloadName, caption string
 	if kind == "file" {
-		payload, err = ReadFileFromContainer(lockCtx, baseContainer, filePath)
+		payload, err = ReadFileFromContainer(lockCtx, shell, filePath)
 		if err != nil {
 			a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to send `%s`: `%v`", filePath, err))
 			return nil
@@ -1068,7 +1076,7 @@ func (a *App) CmdDL(ctx context.Context, update *telegram.Update, args []string)
 		}
 		caption = fmt.Sprintf("`%s` (%s bytes)", filePath, commaInt(len(payload)))
 	} else {
-		payload, err = TarDirectoryInContainer(lockCtx, baseContainer, filePath)
+		payload, err = TarDirectoryInContainer(lockCtx, shell, filePath)
 		if err != nil {
 			a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to send `%s`: `%v`", filePath, err))
 			return nil

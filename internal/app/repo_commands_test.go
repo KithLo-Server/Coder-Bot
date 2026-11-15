@@ -293,9 +293,10 @@ func TestDownloadFileAndDirectory(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
-	env.base.archives["/repos/repo/README.md"] = tarFile("README.md", []byte("hello"))
+	shell := env.repoShell("repo")
+	shell.archives["/workspace/README.md"] = tarFile("README.md", []byte("hello"))
 	var kind = "file"
-	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{Output: []byte(kind + "\n")}, nil
 		}
@@ -307,7 +308,7 @@ func TestDownloadFileAndDirectory(t *testing.T) {
 	}
 
 	kind = "dir"
-	env.base.stream = ioNopCloser("tarball")
+	shell.stream = ioNopCloser("tarball")
 	env.app.CmdDL(env.ctx, env.message("/dl .", 1), []string{"."})
 	if len(env.tg.documents) != 2 || string(env.tg.documentRaw) != "tarball" || !strings.Contains(env.tg.documents[1].Text, "compressed") {
 		t.Fatalf("directory = %+v", env.tg.documents)
@@ -325,7 +326,8 @@ func TestUploadAttachment(t *testing.T) {
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
 	env.tg.files["doc"] = []byte("payload")
-	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	shell := env.repoShell("repo")
+	shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{ExitCode: 1}, nil
 		}
@@ -338,11 +340,14 @@ func TestUploadAttachment(t *testing.T) {
 	if err := env.app.CmdUL(env.ctx, update, []string{"docs/file.txt"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(env.base.putPaths) != 1 || env.base.putPaths[0] != "/repos/repo/docs" {
-		t.Fatalf("put paths = %+v", env.base.putPaths)
+	if len(shell.putPaths) != 1 || shell.putPaths[0] != "/workspace/docs" {
+		t.Fatalf("put paths = %+v", shell.putPaths)
 	}
-	if !strings.Contains(string(env.base.putData[0]), "payload") {
+	if !strings.Contains(string(shell.putData[0]), "payload") {
 		t.Fatal("archive missing payload")
+	}
+	if len(env.base.putPaths) != 0 {
+		t.Fatalf("base container should not receive uploads: %+v", env.base.putPaths)
 	}
 	if !strings.Contains(env.tg.edits[len(env.tg.edits)-1].Text, "Uploaded `file.txt`") {
 		t.Fatalf("edits = %+v", env.tg.edits)
@@ -444,7 +449,7 @@ func TestUploadTrailingSlashOnFileIsRejected(t *testing.T) {
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
 	env.tg.files["doc"] = []byte("payload")
-	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.repoShell("repo").execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{Output: []byte("file\n")}, nil
 		}

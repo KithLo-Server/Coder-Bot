@@ -85,10 +85,10 @@ func TestContainerPathHelpers(t *testing.T) {
 			t.Fatalf("NormalizeRepoURL(%q) = %q, want %q", input, got, want)
 		}
 	}
-	if got := env.app.ResolveBasePath("a/../b", "repo"); got != "/repos/repo/b" {
+	if got := env.app.ResolveShellPath("a/../b"); got != "/workspace/b" {
 		t.Fatalf("resolved = %q", got)
 	}
-	if got := env.app.ResolveBasePath("/tmp/x", "repo"); got != "/tmp/x" {
+	if got := env.app.ResolveShellPath("/tmp/x"); got != "/tmp/x" {
 		t.Fatalf("absolute = %q", got)
 	}
 }

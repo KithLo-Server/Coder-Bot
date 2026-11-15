@@ -9,7 +9,7 @@ A Go Telegram bot that runs the [OpenCode](https://opencode.ai) CLI inside per-r
 - **Execute Plan & Commit** — plan responses carry a button that re-runs OpenCode in build mode on the same session with an instruction to commit the result.
 - **Model selection** — interactive `/model` picker and `/think` variant selection, driven by an `OPENCODE_MODELS` catalog.
 - **Cancellable runs** — `/cancel` terminates the running process tree in the base, worker, or shell container that is running it.
-- **File transfer** — `/dl` downloads files or directory archives from the base's repository checkout; `/ul` and photo uploads write through the base container.
+- **File transfer** — `/dl` downloads files or directory archives from the active repository's shell container; `/ul` uploads through it, while photo uploads write through the base container.
 - **Git sync** — `/pull` and `/push` operate directly on the base container's repository checkout.
 - **Saved command sets** — `/cmd` records bot commands per chat, `/exec` replays them with argument placeholders.
 - **Multi-chat support** — sessions, active repositories, and command sets are scoped per chat, including groups.
@@ -40,9 +40,9 @@ base binds:
 ```
 
 - The **base container** runs the bot process and a Docker daemon. The bot talks to that inner daemon through `/var/run/docker.sock`; the host Docker socket is not mounted.
-- Repository management, Git operations, `/dl`, and `/ul` run directly in the base container against `/repos/<repo>`.
+- Repository management and Git operations run directly in the base container against `/repos/<repo>`; `/dl` and `/ul` run in the repository's shell container against `/workspace`.
 - Each repository gets a long-lived **worker** (`opencode_<repo>`) and **shell** (`opencode_shell_<repo>`), both created through the base's inner daemon.
-- Only `/ask`, `/code`, plain text, `#`-prefixed text, and the OpenCode step of photo handling run in a worker. Only `/sh` uses a shell container.
+- Only `/ask`, `/code`, plain text, `#`-prefixed text, and the OpenCode step of photo handling run in a worker. Only `/sh`, `/dl`, and `/ul` use a shell container.
 - A **per-repository lock** serializes work, while different repositories can run in parallel.
 - A **local Telegram Bot API server** is supported through `TELEGRAM_API_BASE_URL` and `TELEGRAM_API_FILE_BASE_URL`. Bot file transfers through `/dl` remain capped at 50 MB.
 
@@ -163,8 +163,8 @@ The worker and shell images are fixed:
 | `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously deleted repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). |
 | `/reload <name>` | Recreate the worker and shell, refresh the checkout with a fast-forward pull in the base, and reset its OpenCode sessions. |
 | `/reloadall` | Recreate the containers and refresh the checkout of every repository, resetting their OpenCode sessions. |
-| `/dl <path>` | Download a file or a compressed directory (up to 50 MB) from the active checkout on the base container. |
-| `/ul <path>` | Upload an attached file to a destination in the active checkout through the base container. |
+| `/dl <path>` | Download a file or a compressed directory (up to 50 MB) from the active checkout in the shell container. |
+| `/ul <path>` | Upload an attached file to a destination in the active checkout through the shell container. |
 | `/sh <command>` | Run a cancellable shell command in the active repository's shell container. |
 | `/pull` | Pull the active repository with `--rebase`, aborting and reporting a conflict. |
 | `/push` | Push the active repository, rebasing onto upstream first when it has new commits. |
@@ -179,7 +179,7 @@ The worker and shell images are fixed:
 
 Plain text messages run plan mode. Text starting with `#` runs build mode with the `#` stripped. Photos are saved to `/upload/<name>` on the base container and inspected with OpenCode in the active worker.
 
-Paths passed to `/dl` and `/ul` are resolved relative to the active repository in the base container unless they start with `/`. `/sh` paths are relative to `/workspace` inside that repository's shell container.
+Paths passed to `/dl`, `/ul`, and `/sh` are resolved relative to `/workspace` inside the active repository's shell container unless they start with `/`.
 
 `/mount <name>` exposes another configured repository's checkout inside the active repository's worker and shell at `/opt/<name>`, so OpenCode sessions and `/sh` can read and edit it. Mounts are stored per repository and survive `/reload`. Because Docker bind mounts are fixed at container creation, mounting or unmounting recreates both child containers and starts a fresh OpenCode session (git state is untouched).
 
