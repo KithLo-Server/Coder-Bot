@@ -62,13 +62,22 @@ jobs:
 
           echo "All required compose variables are defined."
 
-      - name: Pull worker image
+      - name: Prepare data directories
         shell: bash
-        run: docker pull ghcr.io/kithlo-server/coder-worker:latest
+        run: |
+          set -euo pipefail
+          mkdir -p "$OPENCODE_DATA/data" "$OPENCODE_DATA/repos" "$OPENCODE_DATA/uploads" "$OPENCODE_DATA/docker"
 
       - name: Deploy
         shell: bash
         run: docker compose up -d --build --remove-orphans
+
+      - name: Pull child images into the base daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose exec -T opencode docker pull ghcr.io/kithlo-server/coder-worker:latest
+          docker compose exec -T opencode docker pull ghcr.io/kithlo-server/coder-shell:latest
 
       - name: Show container status
         if: always()
