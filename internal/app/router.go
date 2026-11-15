@@ -86,9 +86,8 @@ func (a *App) Handle(ctx context.Context, update *telegram.Update) {
 			return
 		}
 		// Group -1: capture typed commands while a /cmd set is being collected.
-		// /cmd itself is let through so the collection can be inspected or restarted.
 		chatID, _ := messageTarget(update)
-		if name != "cmd" && a.HasPendingCommand(chatID) {
+		if a.HasPendingCommand(chatID) {
 			handled, err := a.HandleCommandEntryText(ctx, update)
 			if err != nil {
 				a.Logger.Printf("Command-set capture failed: %v", err)

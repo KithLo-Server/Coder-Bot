@@ -11,7 +11,7 @@ A Go Telegram bot that runs the [OpenCode](https://opencode.ai) CLI inside per-r
 - **Cancellable runs** — `/cancel` terminates the running process tree in the base, worker, or shell container that is running it.
 - **File transfer** — `/dl` downloads files or directory archives from the base's repository checkout; `/ul` and photo uploads write through the base container.
 - **Git sync** — `/pull` and `/push` operate directly on the base container's repository checkout.
-- **Saved command sets** — `/cmd` records commands per chat, `/exec` replays them with argument placeholders.
+- **Saved command sets** — `/cmd` records bot commands per chat, `/exec` replays them with argument placeholders.
 - **Multi-chat support** — sessions, active repositories, and command sets are scoped per chat, including groups.
 
 ## Architecture
@@ -40,7 +40,7 @@ base binds:
 ```
 
 - The **base container** runs the bot process and a Docker daemon. The bot talks to that inner daemon through `/var/run/docker.sock`; the host Docker socket is not mounted.
-- Repository management, Git operations, `/dl`, `/ul`, and plain `/exec` lines run directly in the base container against `/repos/<repo>`.
+- Repository management, Git operations, `/dl`, and `/ul` run directly in the base container against `/repos/<repo>`.
 - Each repository gets a long-lived **worker** (`opencode_<repo>`) and **shell** (`opencode_shell_<repo>`), both created through the base's inner daemon.
 - Only `/ask`, `/code`, plain text, `#`-prefixed text, and the OpenCode step of photo handling run in a worker. Only `/sh` uses a shell container.
 - A **per-repository lock** serializes work, while different repositories can run in parallel.
@@ -189,14 +189,14 @@ Plan responses (`/ask`, plain text, and photo analysis) include an **Execute Pla
 
 ### Saved command sets
 
-`/cmd <name>` collects one line per message until you press **Done**. Lines beginning with a supported bot command are dispatched to that command's handler; anything else runs as a shell command in the base container. `/cmd` and `/exec` are not re-dispatched from saved lines, so they run in the base like other text. Sets are scoped per chat and persisted.
+`/cmd <name>` collects one line per message until you press **Done**. Every saved line must be a supported bot command; plain shell lines and unknown commands are rejected. Use `/sh` to save a shell command. `/cancel` remains a collection control and is not saved. Sets are scoped per chat and persisted.
 
 Use `%1`, `%2`, … in saved lines to insert `/exec` arguments, and `%%` for a literal `%`:
 
 ```text
 /cmd deploy
 /sh make %1
-git status
+/sh git status
 ```
 
 ```text

@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"opencodebot/internal/config"
 	"opencodebot/internal/state"
 	"opencodebot/internal/telegram"
 )
@@ -20,28 +19,33 @@ const (
 )
 
 // BotCommands maps saved-set lines to their real command handlers.
-var BotCommands = map[string]HandlerFunc{
-	"create":    (*App).CmdCreate,
-	"set":       (*App).CmdSet,
-	"info":      (*App).CmdInfo,
-	"list":      (*App).CmdList,
-	"mount":     (*App).CmdMount,
-	"unmount":   (*App).CmdUnmount,
-	"delete":    (*App).CmdDelete,
-	"purge":     (*App).CmdPurge,
-	"reload":    (*App).CmdReload,
-	"reloadall": (*App).CmdReloadAll,
-	"dl":        (*App).CmdDL,
-	"ul":        (*App).CmdUL,
-	"sh":        (*App).CmdSh,
-	"pull":      (*App).CmdPull,
-	"push":      (*App).CmdPush,
-	"ask":       (*App).CmdAsk,
-	"code":      (*App).CmdCode,
-	"think":     (*App).CmdThink,
-	"model":     (*App).CmdModel,
-	"clear":     (*App).CmdClear,
-	"cancel":    (*App).CmdCancel,
+var BotCommands map[string]HandlerFunc
+
+func init() {
+	BotCommands = map[string]HandlerFunc{
+		"create":    (*App).CmdCreate,
+		"set":       (*App).CmdSet,
+		"info":      (*App).CmdInfo,
+		"list":      (*App).CmdList,
+		"mount":     (*App).CmdMount,
+		"unmount":   (*App).CmdUnmount,
+		"delete":    (*App).CmdDelete,
+		"purge":     (*App).CmdPurge,
+		"reload":    (*App).CmdReload,
+		"reloadall": (*App).CmdReloadAll,
+		"dl":        (*App).CmdDL,
+		"ul":        (*App).CmdUL,
+		"sh":        (*App).CmdSh,
+		"pull":      (*App).CmdPull,
+		"push":      (*App).CmdPush,
+		"ask":       (*App).CmdAsk,
+		"code":      (*App).CmdCode,
+		"think":     (*App).CmdThink,
+		"model":     (*App).CmdModel,
+		"clear":     (*App).CmdClear,
+		"cmd":       (*App).CmdCmd,
+		"exec":      (*App).CmdExec,
+	}
 }
 
 func commandCallbackData(action, payload string) string {
@@ -218,7 +222,29 @@ func isCmdControl(command string) bool {
 	if before, _, ok := strings.Cut(name, "@"); ok {
 		name = before
 	}
-	return name == "/cmd" || name == "/cancel"
+	return name == "/cancel"
+}
+
+// savedCommandHandler resolves a saved line to its bot command handler.
+func savedCommandHandler(command string) (string, []string, HandlerFunc, bool) {
+	name, args, ok := splitBotCommand(command)
+	if !ok {
+		return "", nil, nil, false
+	}
+	handler, exists := BotCommands[name]
+	if !exists {
+		return name, args, nil, false
+	}
+	return name, args, handler, true
+}
+
+func firstInvalidSavedCommand(commands []string) (int, string, bool) {
+	for index, command := range commands {
+		if _, _, _, ok := savedCommandHandler(command); !ok {
+			return index, command, false
+		}
+	}
+	return 0, "", true
 }
 
 // CaptureCollectedCommand stores a typed line while a /cmd set is being collected.
@@ -249,6 +275,10 @@ func (a *App) HandleCommandEntryText(ctx context.Context, update *telegram.Updat
 	}
 	if isCmdControl(command) {
 		return false, nil
+	}
+	if _, _, _, ok := savedCommandHandler(command); !ok {
+		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Only bot commands can be saved. Use `/sh` for shell commands.\nUnsupported line: `%s`", command))
+		return true, err
 	}
 	pending = a.AppendPendingCommand(chatID, command)
 	if pending == nil {
@@ -335,10 +365,14 @@ func (a *App) HandleCommandCallback(ctx context.Context, update *telegram.Update
 		}
 		name := pending.Name
 		commands := append([]string(nil), pending.Commands...)
-		a.DeletePendingCommand(chatID)
 		if len(commands) == 0 {
+			a.DeletePendingCommand(chatID)
 			return a.editCallbackMessage(ctx, update, fmt.Sprintf("`%s` has no commands, so nothing was saved.", name), true)
 		}
+		if index, invalid, ok := firstInvalidSavedCommand(commands); !ok {
+			return a.editCallbackMessage(ctx, update, fmt.Sprintf("Cannot save `%s`: line %d (`%s`) is not a supported bot command. Replace it and press **Done** again.", name, index+1, invalid), true)
+		}
+		a.DeletePendingCommand(chatID)
 		a.SaveCommandSet(chatID, &state.CommandSet{Name: name, Commands: commands})
 		a.Save()
 		lines := []string{fmt.Sprintf("**Saved command set** `%s` in this chat (%d command(s)):\n", name, len(commands))}
@@ -430,52 +464,41 @@ func (a *App) CmdExec(ctx context.Context, update *telegram.Update, args []strin
 		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Command set `%s` has no commands.", name))
 		return err
 	}
+	type preparedCommand struct {
+		raw     string
+		args    []string
+		handler HandlerFunc
+	}
+	prepared := make([]preparedCommand, 0, len(set.Commands))
+	for _, savedCommand := range set.Commands {
+		command := SubstitutePlaceholders(savedCommand, execArgs)
+		_, botArgs, handler, ok := savedCommandHandler(command)
+		if !ok {
+			_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Cannot execute `%s`: `%s` is not a supported bot command. Only bot commands can be saved and executed.", name, command))
+			return err
+		}
+		prepared = append(prepared, preparedCommand{raw: savedCommand, args: botArgs, handler: handler})
+	}
 	repoName := a.ActiveName(chatID)
 	_ = a.Telegram.SendChatAction(ctx, chatID, "typing")
 	scope := ""
 	if repoName != "" {
 		scope = fmt.Sprintf(" in `%s`", repoName)
 	}
-	status, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Executing `%s` (%d command(s))%s...", name, len(set.Commands), scope))
+	status, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Executing `%s` (%d command(s))%s...", name, len(prepared), scope))
 	if err != nil {
 		return err
 	}
 	cancelled := false
-	for _, savedCommand := range set.Commands {
-		command := SubstitutePlaceholders(savedCommand, execArgs)
-		botCommand, botArgs, isBot := splitBotCommand(command)
+	for _, command := range prepared {
 		activeRepo := a.ActiveName(chatID)
 		runGeneration := a.Generation(activeRepo)
-		if isBot {
-			if handler, exists := BotCommands[botCommand]; exists {
-				if err := handler(a, ctx, update, botArgs); err != nil {
-					a.Logger.Printf("Command %q of set %q failed: %v", savedCommand, name, err)
-				}
-				if a.Generation(activeRepo) != runGeneration {
-					cancelled = true
-					break
-				}
-				continue
-			}
+		if err := command.handler(a, ctx, update, command.args); err != nil {
+			a.Logger.Printf("Command %q of set %q failed: %v", command.raw, name, err)
 		}
-		if activeRepo == "" || !a.RepoExists(activeRepo) {
-			a.DeleteMessageBestEffort(ctx, status.ChatID, status.ID)
-			_, err := a.replyMarkdown(ctx, update, config.NoActiveRepoMessage)
-			return err
-		}
-		lockCtx, release, err := a.Locks.Acquire(ctx, activeRepo)
-		if err != nil {
-			a.Logger.Printf("Command %q of set %q failed: %v", savedCommand, name, err)
-			continue
-		}
-		_, execErr := a.ExecuteCancellable(lockCtx, a.BaseContainer(), command, chatID, activeRepo, a.repoBasePath(activeRepo))
-		release()
-		if execErr == ErrRunCancelled {
+		if a.Generation(activeRepo) != runGeneration {
 			cancelled = true
 			break
-		}
-		if execErr != nil {
-			a.Logger.Printf("Command %q of set %q failed: %v", savedCommand, name, execErr)
 		}
 	}
 	if cancelled {

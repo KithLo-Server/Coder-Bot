@@ -49,7 +49,7 @@ func TestCommandSetFlowAndExec(t *testing.T) {
 		t.Fatal("expected collection keyboard")
 	}
 
-	for _, line := range []string{"/sh make %1", "git status"} {
+	for _, line := range []string{"/sh make %1", "/sh git status"} {
 		handled, err := env.app.HandleCommandEntryText(env.ctx, env.message(line, chatID))
 		if err != nil || !handled {
 			t.Fatalf("capture %q handled=%v err=%v", line, handled, err)
@@ -67,12 +67,10 @@ func TestCommandSetFlowAndExec(t *testing.T) {
 	}
 
 	var executed []string
-	record := func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.repoShell("repo").execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		executed = append(executed, options.Cmd[len(options.Cmd)-1])
 		return docker.ExecResult{ExitCode: 0, Output: []byte("ok")}, nil
 	}
-	env.base.execFunc = record
-	env.repoShell("repo").execFunc = record
 	if err := env.app.CmdExec(env.ctx, env.message("/exec deploy release", chatID), []string{"deploy", "release"}); err != nil {
 		t.Fatal(err)
 	}
@@ -87,17 +85,17 @@ func TestCommandSetFlowAndExec(t *testing.T) {
 func TestCommandSetEditDeleteCancel(t *testing.T) {
 	env := newTestEnv(t)
 	chatID := int64(1)
-	env.app.SaveCommandSet(chatID, &state.CommandSet{Name: "x", Commands: []string{"one", "two"}})
+	env.app.SaveCommandSet(chatID, &state.CommandSet{Name: "x", Commands: []string{"/pull", "/push"}})
 
 	env.app.HandleCommandCallback(env.ctx, env.callback("cmdset:edit:x", chatID))
 	pending := env.app.GetPendingCommand(chatID)
 	if pending == nil || !pending.Editing || len(pending.Commands) != 0 {
 		t.Fatalf("edit pending = %+v", pending)
 	}
-	env.app.HandleCommandEntryText(env.ctx, env.message("three", chatID))
+	env.app.HandleCommandEntryText(env.ctx, env.message("/clear", chatID))
 	env.app.HandleCommandCallback(env.ctx, env.callback("cmdset:done", chatID))
 	set, _ := env.app.CommandSet(chatID, "x")
-	if strings.Join(set.Commands, ",") != "three" {
+	if strings.Join(set.Commands, ",") != "/clear" {
 		t.Fatalf("edited set = %+v", set)
 	}
 
@@ -107,12 +105,70 @@ func TestCommandSetEditDeleteCancel(t *testing.T) {
 	}
 
 	env.app.CmdCmd(env.ctx, env.message("/cmd y", chatID), []string{"y"})
-	env.app.HandleCommandEntryText(env.ctx, env.message("line", chatID))
+	env.app.HandleCommandEntryText(env.ctx, env.message("/info", chatID))
 	env.app.HandleCommandCallback(env.ctx, env.callback("cmdset:cancel", chatID))
 	if env.app.GetPendingCommand(chatID) != nil {
 		t.Fatal("pending should be cancelled")
 	}
 	if _, ok := env.app.CommandSet(chatID, "y"); ok {
 		t.Fatal("cancelled set must not be saved")
+	}
+}
+
+func TestCommandSetCollectionOnlyAcceptsBotCommands(t *testing.T) {
+	env := newTestEnv(t)
+	chatID := int64(1)
+	env.app.CmdCmd(env.ctx, env.message("/cmd deploy", chatID), []string{"deploy"})
+
+	for _, invalid := range []string{"git status", "/unknown"} {
+		handled, err := env.app.HandleCommandEntryText(env.ctx, env.message(invalid, chatID))
+		if err != nil || !handled {
+			t.Fatalf("invalid %q handled=%v err=%v", invalid, handled, err)
+		}
+		if !strings.Contains(env.tg.messages[len(env.tg.messages)-1].Text, "Only bot commands can be saved") {
+			t.Fatalf("missing rejection message for %q: %+v", invalid, env.tg.messages[len(env.tg.messages)-1])
+		}
+	}
+	pending := env.app.GetPendingCommand(chatID)
+	if pending == nil || len(pending.Commands) != 0 {
+		t.Fatalf("invalid lines should not be stored: %+v", pending)
+	}
+
+	handled, err := env.app.HandleCommandEntryText(env.ctx, env.message("/cancel", chatID))
+	if err != nil || handled {
+		t.Fatalf("cancel should remain a control: handled=%v err=%v", handled, err)
+	}
+
+	for _, valid := range []string{"/cmd nested", "/exec nested"} {
+		handled, err := env.app.HandleCommandEntryText(env.ctx, env.message(valid, chatID))
+		if err != nil || !handled {
+			t.Fatalf("valid %q handled=%v err=%v", valid, handled, err)
+		}
+	}
+	pending = env.app.GetPendingCommand(chatID)
+	if pending == nil || len(pending.Commands) != 2 {
+		t.Fatalf("cmd/exec should be saveable: %+v", pending)
+	}
+}
+
+func TestCommandSetExecRejectsStoredNonCommand(t *testing.T) {
+	env := newTestEnv(t)
+	chatID := int64(1)
+	env.addRepo("repo")
+	env.app.SetActiveContext(chatID, "repo")
+	env.app.SaveCommandSet(chatID, &state.CommandSet{Name: "bad", Commands: []string{"/sh echo ok", "git status"}})
+	executed := false
+	env.repoShell("repo").execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+		executed = true
+		return docker.ExecResult{}, nil
+	}
+	if err := env.app.CmdExec(env.ctx, env.message("/exec bad", chatID), []string{"bad"}); err != nil {
+		t.Fatal(err)
+	}
+	if executed {
+		t.Fatal("no command should run when the set contains a non-command")
+	}
+	if !strings.Contains(env.tg.messages[len(env.tg.messages)-1].Text, "not a supported bot command") {
+		t.Fatalf("messages = %+v", env.tg.messages)
 	}
 }
