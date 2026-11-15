@@ -60,8 +60,8 @@ base binds:
 1. Export the required variables and create the external network and directories used by Compose:
 
    ```bash
-   export OPENCODE_BOT_TOKEN="123456:ABC..."
-   export OPENCODE_ALLOWED_USER_ID="123456789"
+   export TELEGRAM_BOT_TOKEN="123456:ABC..."
+   export TELEGRAM_ALLOWED_USER_ID="123456789"
    export OPENCODE_DATA="/srv/opencode"
    export OPENCODE_SSH_KEY="$(cat ~/.ssh/opencode_key)"
    export TELEGRAM_BOT_API_DATA="/srv/telegram-bot-api"
@@ -86,13 +86,13 @@ base binds:
 
 ## Configuration
 
-The bot reads configuration from environment variables. The Compose file maps host variables such as `OPENCODE_BOT_TOKEN` and `OPENCODE_ALLOWED_USER_ID` into the bot's variables.
+The bot reads configuration from environment variables. The Compose file passes host variables such as `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID` into the bot.
 
 ### Required
 
 | Variable | Description |
 | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token. Compose supplies it from `OPENCODE_BOT_TOKEN`. |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token. |
 | `DEEPSEEK_API_KEY` | API key passed to OpenCode workers. |
 | `OPENCODE_MODELS` | JSON model catalog. The bot refuses to start if it is missing or malformed. |
 
@@ -100,7 +100,7 @@ The bot reads configuration from environment variables. The Compose file maps ho
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `ALLOWED_USER_ID` | unset | Comma-separated Telegram user IDs allowed to use the bot. Unset/empty allows everyone. Compose supplies it from `OPENCODE_ALLOWED_USER_ID`. |
+| `TELEGRAM_ALLOWED_USER_ID` | unset | Comma-separated Telegram user IDs allowed to use the bot. Unset/empty allows everyone. |
 | `TELEGRAM_API_BASE_URL` | official API | Local Bot API server base URL, e.g. `http://telegram_bot_api_server:8081/bot`. |
 | `TELEGRAM_API_FILE_BASE_URL` | official API | Local Bot API file URL, e.g. `http://telegram_bot_api_server:8081/file/bot`. |
 | `OPENROUTER_API_KEY` | unset | Enables OpenRouter models in workers. |
@@ -257,7 +257,7 @@ Secrets and variables are supplied through GitHub Actions secrets/variables, not
 - The base container is privileged because it runs its own Docker daemon. The host Docker socket is not mounted into the base, worker, or shell containers.
 - Worker and shell containers are long-lived and named `opencode_<repo>` and `opencode_shell_<repo>`; deleting a repository removes both.
 - Worker containers receive provider credentials. Shell containers receive only Git/SSH configuration and no OpenCode or provider tokens.
-- Set `ALLOWED_USER_ID` to restrict access. Leaving it unset allows any Telegram user who finds the bot to use it.
+- Set `TELEGRAM_ALLOWED_USER_ID` to restrict access. Leaving it unset allows any Telegram user who finds the bot to use it.
 - API keys, the Vertex service-account JSON, and the SSH signing key are passed through environment variables. The SSH key is written into the base and child containers at startup; no credential file is stored on the host.
 - Repository files are untrusted input. Base commands operate on `/repos`, worker/shell commands operate on their mounted checkout, and `/upload` is read-only inside child containers.
 - Inner Docker images and container metadata persist in `${OPENCODE_DATA}/docker`. Back up that directory alongside repositories and uploads if you need to preserve them.

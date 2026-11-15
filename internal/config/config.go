@@ -119,7 +119,7 @@ func LoadFromEnv(getenv func(string) string) (*Config, error) {
 	}
 
 	allowed := make(map[string]bool)
-	for _, id := range strings.Split(getenv("ALLOWED_USER_ID"), ",") {
+	for _, id := range strings.Split(getenv("TELEGRAM_ALLOWED_USER_ID"), ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			allowed[id] = true
 		}

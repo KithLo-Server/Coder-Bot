@@ -10,10 +10,10 @@ services:
     build:
       context: .
     environment:
-      - "TELEGRAM_BOT_TOKEN=${OPENCODE_BOT_TOKEN}"
+      - "TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}"
       - "TELEGRAM_API_BASE_URL=http://telegram_bot_api_server:8081/bot"
       - "TELEGRAM_API_FILE_BASE_URL=http://telegram_bot_api_server:8081/file/bot"
-      - "ALLOWED_USER_ID=${OPENCODE_ALLOWED_USER_ID}"
+      - "TELEGRAM_ALLOWED_USER_ID=${TELEGRAM_ALLOWED_USER_ID}"
       - "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}"
       - "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}"
       - "OPENCODE_MODELS=${OPENCODE_MODELS:-}"
