@@ -72,7 +72,13 @@ func (a *App) GetRepoContainer(ctx context.Context, name string) (docker.Contain
 	if err != nil {
 		return nil, err
 	}
-	if container != nil && repo.ContainerID != container.ID() {
+	if container == nil {
+		container, err = a.createWorkerContainer(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if repo.ContainerID != container.ID() {
 		repo.ContainerID = container.ID()
 		a.SetRepo(name, repo)
 	}
@@ -89,7 +95,13 @@ func (a *App) GetShellContainer(ctx context.Context, name string) (docker.Contai
 	if err != nil {
 		return nil, err
 	}
-	if container != nil && repo.ShellContainerID != container.ID() {
+	if container == nil {
+		container, err = a.createShellContainer(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if repo.ShellContainerID != container.ID() {
 		repo.ShellContainerID = container.ID()
 		a.SetRepo(name, repo)
 	}

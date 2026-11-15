@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"opencodebot/internal/docker"
+	"opencodebot/internal/state"
 	"opencodebot/internal/telegram"
 )
 
@@ -457,5 +458,25 @@ func TestUploadTrailingSlashOnFileIsRejected(t *testing.T) {
 	last := env.tg.edits[len(env.tg.edits)-1].Text
 	if !strings.Contains(last, "not a directory") {
 		t.Fatalf("edits = %+v", env.tg.edits)
+	}
+}
+
+func TestGetContainersCreatesMissingOnDemand(t *testing.T) {
+	env := newTestEnv(t)
+	env.app.SetRepo("repo", &state.Repo{URL: "https://example.com/repo"})
+	worker, err := env.app.GetRepoContainer(env.ctx, "repo")
+	if err != nil || worker == nil {
+		t.Fatalf("worker = %v err = %v", worker, err)
+	}
+	shell, err := env.app.GetShellContainer(env.ctx, "repo")
+	if err != nil || shell == nil {
+		t.Fatalf("shell = %v err = %v", shell, err)
+	}
+	repo, _ := env.app.Repo("repo")
+	if repo.ContainerID != worker.ID() || repo.ShellContainerID != shell.ID() {
+		t.Fatalf("container ids not stored: %+v", repo)
+	}
+	if len(env.docker.runCalls) != 2 {
+		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
 }
