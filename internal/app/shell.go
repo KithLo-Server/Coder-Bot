@@ -35,13 +35,13 @@ func (a *App) CmdSh(ctx context.Context, update *telegram.Update, args []string)
 		_, err := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Cancelled the queued `/sh` command for `%s`.", name))
 		return err
 	}
-	shell, err := a.GetShellContainer(lockCtx)
+	shell, err := a.GetShellContainer(lockCtx, name)
 	if err != nil || shell == nil {
 		_, err := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Shell container for `%s` is not available.", name))
 		return err
 	}
 	_ = a.Telegram.SendChatAction(lockCtx, chatID, "typing")
-	output, err := a.ExecuteCancellable(lockCtx, shell, command, chatID, name, repoWorkspace(name))
+	output, err := a.ExecuteCancellable(lockCtx, shell, command, chatID, name, config.WorkspaceDir)
 	if err != nil {
 		if err == ErrRunCancelled {
 			_, replyErr := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Cancelled `/sh %s` in `%s`.", command, name))

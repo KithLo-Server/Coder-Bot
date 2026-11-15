@@ -284,7 +284,7 @@ type testEnv struct {
 	app    *App
 	tg     *fakeMessenger
 	docker *fakeDocker
-	shell  *fakeContainer
+	base   *fakeContainer
 	ctx    context.Context
 }
 
@@ -292,23 +292,37 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	tg := newFakeMessenger()
 	fake := newFakeDocker()
-	shell := fake.add(&fakeContainer{id: "shell-id", name: config.ShellContainerName, status: "running", archives: make(map[string][]byte)})
+	baseContainer := fake.add(&fakeContainer{id: "base", name: "base", status: "running", archives: make(map[string][]byte)})
 	cfg := &config.Config{
 		DeepseekAPIKey: "key",
-		HostReposDir:   "/repos",
+		ReposDir:       "/repos",
+		UploadsDir:     "/upload",
 		DataDir:        t.TempDir(),
 		StateFile:      filepath.Join(t.TempDir(), "state.json"),
 		AllowedUserIDs: map[string]bool{},
 		Catalog:        testCatalog(t),
 	}
 	application := New(cfg, state.New(), tg, fake, log.New(io.Discard, "", 0))
-	return &testEnv{app: application, tg: tg, docker: fake, shell: shell, ctx: context.Background()}
+	application.baseContainer = baseContainer
+	return &testEnv{app: application, tg: tg, docker: fake, base: baseContainer, ctx: context.Background()}
 }
 
 func (e *testEnv) addRepo(name string) *fakeContainer {
-	container := e.docker.add(&fakeContainer{id: "worker-" + name, name: "opencode_" + name, status: "running", archives: make(map[string][]byte)})
-	e.app.SetRepo(name, &state.Repo{URL: "https://example.com/" + name, ContainerID: container.id, Model: "m1", Variant: e.app.Cfg.Catalog.DefaultVariant, VariantSet: true})
+	container := e.docker.add(&fakeContainer{id: "worker-" + name, name: workerContainerName(name), status: "running", archives: make(map[string][]byte)})
+	shell := e.docker.add(&fakeContainer{id: "shell-" + name, name: shellContainerName(name), status: "running", archives: make(map[string][]byte)})
+	e.app.SetRepo(name, &state.Repo{
+		URL:              "https://example.com/" + name,
+		ContainerID:      container.id,
+		ShellContainerID: shell.id,
+		Model:            "m1",
+		Variant:          e.app.Cfg.Catalog.DefaultVariant,
+		VariantSet:       true,
+	})
 	return container
+}
+
+func (e *testEnv) repoShell(name string) *fakeContainer {
+	return e.docker.containers[shellContainerName(name)]
 }
 
 func (e *testEnv) message(text string, chatID int64) *telegram.Update {

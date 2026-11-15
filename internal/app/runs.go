@@ -13,6 +13,9 @@ import (
 )
 
 func (a *App) runContainer(ctx context.Context, entry *runEntry, name string) (docker.Container, error) {
+	if entry.ContainerID == a.BaseContainer().ID() {
+		return a.BaseContainer(), nil
+	}
 	if entry.ContainerID == "" {
 		return a.GetRepoContainer(ctx, name)
 	}
@@ -70,6 +73,10 @@ func (a *App) CmdCancel(ctx context.Context, update *telegram.Update, args []str
 			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+	if container.ID() == a.BaseContainer().ID() {
+		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Could not terminate the command in `%s`.", name))
+		return err
 	}
 	if err := RestartContainer(ctx, container); err != nil {
 		a.Logger.Printf("Failed to restart worker %s: %v", name, err)

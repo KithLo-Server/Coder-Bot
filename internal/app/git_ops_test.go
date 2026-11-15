@@ -29,7 +29,7 @@ func gitResultFor(options docker.ExecOptions) docker.ExecResult {
 
 func TestPushWithRebaseStatuses(t *testing.T) {
 	env := newTestEnv(t)
-	shell := env.shell
+	shell := env.base
 	shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		return gitResultFor(options), nil
 	}
@@ -68,7 +68,7 @@ func TestPushWithRebaseStatuses(t *testing.T) {
 func TestPullConflictAbortsRebase(t *testing.T) {
 	env := newTestEnv(t)
 	var sawAbort bool
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		script := options.Cmd[2]
 		switch {
 		case strings.Contains(script, " pull --rebase"):
@@ -80,7 +80,7 @@ func TestPullConflictAbortsRebase(t *testing.T) {
 		}
 		return docker.ExecResult{}, nil
 	}
-	pulled, conflicted, _ := pullRebase(env.ctx, env.shell, "/workspace/repo")
+	pulled, conflicted, _ := pullRebase(env.ctx, env.base, "/workspace/repo")
 	if pulled || !conflicted || !sawAbort {
 		t.Fatalf("pulled=%v conflicted=%v abort=%v", pulled, conflicted, sawAbort)
 	}
@@ -90,7 +90,7 @@ func TestPullAndPushCommands(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		return gitResultFor(options), nil
 	}
 	if err := env.app.CmdPull(env.ctx, env.message("/pull", 1), nil); err != nil {

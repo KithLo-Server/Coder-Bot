@@ -39,9 +39,10 @@ func TestCancelSignalsTheContainerRunningTheCommand(t *testing.T) {
 	env := newTestEnv(t)
 	worker := env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
-	runID := env.app.startRun(env.shell.ID(), 1, "repo")
+	shell := env.repoShell("repo")
+	runID := env.app.startRun(shell.ID(), 1, "repo")
 	signalled := false
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if len(options.Cmd) == 3 && strings.Contains(options.Cmd[2], "OPENCODE_CANCEL_TOKEN") {
 			signalled = true
 			return docker.ExecResult{ExitCode: 0}, nil

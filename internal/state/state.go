@@ -15,13 +15,14 @@ import (
 
 // Repo is one configured repository.
 type Repo struct {
-	URL         string
-	ContainerID string
-	Model       string
-	Variant     *string
-	VariantSet  bool
-	Mounts      []string
-	Extra       map[string]json.RawMessage
+	URL              string
+	ContainerID      string
+	ShellContainerID string
+	Model            string
+	Variant          *string
+	VariantSet       bool
+	Mounts           []string
+	Extra            map[string]json.RawMessage
 }
 
 // UnmarshalJSON reads a repository while keeping unknown keys.
@@ -39,6 +40,10 @@ func (r *Repo) UnmarshalJSON(data []byte) error {
 			}
 		case "container_id":
 			if err := json.Unmarshal(raw, &r.ContainerID); err != nil {
+				return err
+			}
+		case "shell_container_id":
+			if err := json.Unmarshal(raw, &r.ShellContainerID); err != nil {
 				return err
 			}
 		case "model":
@@ -94,6 +99,9 @@ func (r Repo) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	if err := write("container_id", r.ContainerID); err != nil {
+		return nil, err
+	}
+	if err := write("shell_container_id", r.ShellContainerID); err != nil {
 		return nil, err
 	}
 	if len(r.Mounts) > 0 {
@@ -185,7 +193,7 @@ func Load(path string, catalog *config.Catalog) (*State, error) {
 	}
 
 	reposRaw, hasRepos := root["repos"]
-	if (version == 2 || version == config.StateVersion) && hasRepos && string(reposRaw) != "null" {
+	if version >= 2 && hasRepos && string(reposRaw) != "null" {
 		if err := loadRepos(result, reposRaw); err != nil {
 			return nil, err
 		}
@@ -277,10 +285,14 @@ func loadActiveContext(result *State, raw json.RawMessage) {
 
 func normalize(s *State, catalog *config.Catalog, version int) {
 	s.Repos.Range(func(name string, repo *Repo) bool {
-		if version != config.StateVersion {
+		if version < 3 {
 			clearModelSelection(repo)
 		} else {
 			normalizeModelSelection(repo, catalog)
+		}
+		if version < 4 {
+			repo.ContainerID = ""
+			repo.ShellContainerID = ""
 		}
 		normalizeMounts(name, repo, s.Repos)
 		delete(repo.Extra, "commands")
@@ -352,7 +364,7 @@ func Save(path string, s *State) error {
 
 func marshalState(s *State) ([]byte, error) {
 	var buf bytes.Buffer
-	buf.WriteString(`{"version":3,"repos":{`)
+	buf.WriteString(`{"version":4,"repos":{`)
 	firstRepo := true
 	s.Repos.Range(func(name string, repo *Repo) bool {
 		if !firstRepo {

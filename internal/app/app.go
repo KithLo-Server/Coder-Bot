@@ -9,6 +9,7 @@ import (
 	"log"
 	"sync"
 
+	"opencodebot/internal/base"
 	"opencodebot/internal/config"
 	"opencodebot/internal/docker"
 	"opencodebot/internal/locks"
@@ -63,6 +64,8 @@ type App struct {
 	Locks    *locks.Manager
 	Logger   *log.Logger
 
+	baseContainer docker.Container
+
 	mu sync.Mutex
 
 	sessions              map[int64]map[string]string
@@ -86,6 +89,7 @@ func New(cfg *config.Config, st *state.State, messenger telegram.Messenger, dock
 		Docker:                dockerAPI,
 		Locks:                 locks.NewManager(),
 		Logger:                logger,
+		baseContainer:         base.New(),
 		sessions:              make(map[int64]map[string]string),
 		modelPrompts:          make(map[int64]*ModelPrompt),
 		pendingCommandEntries: make(map[int64]*PendingCommand),
@@ -95,6 +99,9 @@ func New(cfg *config.Config, st *state.State, messenger telegram.Messenger, dock
 		cancelGenerations:     make(map[string]int),
 	}
 }
+
+// BaseContainer returns the adapter used to run commands in the bot container.
+func (a *App) BaseContainer() docker.Container { return a.baseContainer }
 
 // Save persists the state, logging failures without interrupting the handler.
 func (a *App) Save() {

@@ -50,8 +50,16 @@ kill -KILL $pids 2>/dev/null || true
 exit 0
 `
 
-func repoWorkspace(name string) string {
-	return config.WorkspaceDir + "/" + name
+func (a *App) repoBasePath(name string) string {
+	return path.Join(a.Cfg.ReposDir, name)
+}
+
+func workerContainerName(name string) string {
+	return "opencode_" + name
+}
+
+func shellContainerName(name string) string {
+	return "opencode_shell_" + name
 }
 
 // GetRepoContainer returns the worker of a repository, starting it if stopped.
@@ -60,33 +68,51 @@ func (a *App) GetRepoContainer(ctx context.Context, name string) (docker.Contain
 	if !ok {
 		return nil, nil
 	}
-	container, err := a.Docker.GetContainer(ctx, repo.ContainerID)
-	if err != nil {
-		if errors.Is(err, docker.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	status, err := container.Status(ctx)
+	container, err := a.getRunningContainer(ctx, repo.ContainerID, workerContainerName(name))
 	if err != nil {
 		return nil, err
 	}
-	if status != "running" {
-		if err := container.Start(ctx); err != nil {
-			return nil, err
-		}
+	if container != nil && repo.ContainerID != container.ID() {
+		repo.ContainerID = container.ID()
+		a.SetRepo(name, repo)
 	}
 	return container, nil
 }
 
-// GetShellContainer returns the shared shell container, starting it if stopped.
-func (a *App) GetShellContainer(ctx context.Context) (docker.Container, error) {
-	container, err := a.Docker.GetContainer(ctx, config.ShellContainerName)
+// GetShellContainer returns a repository's shell container, starting it if stopped.
+func (a *App) GetShellContainer(ctx context.Context, name string) (docker.Container, error) {
+	repo, ok := a.Repo(name)
+	if !ok {
+		return nil, nil
+	}
+	container, err := a.getRunningContainer(ctx, repo.ShellContainerID, shellContainerName(name))
 	if err != nil {
-		if errors.Is(err, docker.ErrNotFound) {
-			return nil, nil
-		}
 		return nil, err
+	}
+	if container != nil && repo.ShellContainerID != container.ID() {
+		repo.ShellContainerID = container.ID()
+		a.SetRepo(name, repo)
+	}
+	return container, nil
+}
+
+func (a *App) getRunningContainer(ctx context.Context, id, name string) (docker.Container, error) {
+	var container docker.Container
+	var err error
+	if id != "" {
+		container, err = a.Docker.GetContainer(ctx, id)
+		if err != nil && !errors.Is(err, docker.ErrNotFound) {
+			return nil, err
+		}
+	}
+	if container == nil {
+		container, err = a.Docker.GetContainer(ctx, name)
+		if err != nil {
+			if errors.Is(err, docker.ErrNotFound) {
+				return nil, nil
+			}
+			return nil, err
+		}
 	}
 	status, err := container.Status(ctx)
 	if err != nil {
@@ -220,7 +246,7 @@ func InspectWorkspace(ctx context.Context, container docker.Container, workspace
 
 // ExecuteInContainer runs a shell command, exposing runID to the whole process tree.
 func (a *App) ExecuteInContainer(ctx context.Context, container docker.Container, command, workdir, runID string) (string, error) {
-	env := a.OpencodeEnvironment()
+	env := map[string]string{}
 	if runID != "" {
 		env[RunIDEnv] = runID
 	}
@@ -273,25 +299,25 @@ func RestartContainer(ctx context.Context, container docker.Container) error {
 	return container.Restart(ctx, 1)
 }
 
-// ResolveContainerPath resolves a user path against the active repository.
-func ResolveContainerPath(rawPath, repoName string) string {
+// ResolveBasePath resolves a user path against the active repository on the base
+// container.
+func (a *App) ResolveBasePath(rawPath, repoName string) string {
 	rawPath = strings.TrimSpace(rawPath)
 	if !strings.HasPrefix(rawPath, "/") {
-		base := config.WorkspaceDir
+		base := a.Cfg.ReposDir
 		if repoName != "" {
-			base = repoWorkspace(repoName)
+			base = a.repoBasePath(repoName)
 		}
 		rawPath = base + "/" + rawPath
 	}
-	cleaned := path.Clean(strings.ReplaceAll(rawPath, "\\", "/"))
-	return cleaned
+	return path.Clean(strings.ReplaceAll(rawPath, "\\", "/"))
 }
 
 // DescribeContainerPath returns "file", "dir" or "".
 func DescribeContainerPath(ctx context.Context, container docker.Container, target string) (string, error) {
 	quoted := shellQuote(target)
 	script := fmt.Sprintf("if [ -f %s ]; then echo file; elif [ -d %s ]; then echo dir; else exit 1; fi", quoted, quoted)
-	result, err := container.Exec(ctx, docker.ExecOptions{Cmd: []string{"/bin/bash", "-c", script}, Workdir: config.WorkspaceDir})
+	result, err := container.Exec(ctx, docker.ExecOptions{Cmd: []string{"/bin/bash", "-c", script}, Workdir: "/"})
 	if err != nil {
 		return "", err
 	}

@@ -43,4 +43,20 @@ func TestOpencodeAndWorkerEnvironment(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", key, workerEnv[key], value)
 		}
 	}
+	shellEnv := env.app.ShellEnvironment()
+	for key, value := range map[string]string{
+		"OPENCODE_SSH_KEY": "ssh-key",
+		"GIT_USER_NAME":    "Bot",
+		"GIT_USER_EMAIL":   "bot@example.com",
+	} {
+		if shellEnv[key] != value {
+			t.Fatalf("shell %s = %q, want %q", key, shellEnv[key], value)
+		}
+	}
+	for _, key := range []string{"DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_VERTEX_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS_JSON", "GOOGLE_APPLICATION_CREDENTIALS"} {
+		if _, ok := shellEnv[key]; ok {
+			t.Fatalf("shell environment must not contain %s: %+v", key, shellEnv)
+		}
+	}
+
 }

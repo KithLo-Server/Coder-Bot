@@ -67,10 +67,12 @@ func TestCommandSetFlowAndExec(t *testing.T) {
 	}
 
 	var executed []string
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	record := func(options docker.ExecOptions) (docker.ExecResult, error) {
 		executed = append(executed, options.Cmd[len(options.Cmd)-1])
 		return docker.ExecResult{ExitCode: 0, Output: []byte("ok")}, nil
 	}
+	env.base.execFunc = record
+	env.repoShell("repo").execFunc = record
 	if err := env.app.CmdExec(env.ctx, env.message("/exec deploy release", chatID), []string{"deploy", "release"}); err != nil {
 		t.Fatal(err)
 	}

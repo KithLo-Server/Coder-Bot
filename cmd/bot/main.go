@@ -13,6 +13,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"opencodebot/internal/app"
+	"opencodebot/internal/base"
 	"opencodebot/internal/config"
 	"opencodebot/internal/docker"
 	"opencodebot/internal/state"
@@ -38,6 +39,9 @@ func run() error {
 		return fmt.Errorf("DEEPSEEK_API_KEY environment variable is missing")
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return err
+	}
+	if err := base.ConfigureGit(cfg.SSHKey, cfg.GitUserName, cfg.GitUserEmail); err != nil {
 		return err
 	}
 

@@ -13,12 +13,13 @@ import (
 
 const (
 	WorkerImage           = "ghcr.io/kithlo-server/coder-worker:latest"
-	ShellContainerName    = "opencode_shell"
+	ShellImage            = "ghcr.io/kithlo-server/coder-shell:latest"
 	MaxMessageLength      = 4000
 	WorkspaceDir          = "/workspace"
+	UploadDir             = "/upload"
 	MountDir              = "/opt"
 	MaxUploadBytes        = 50 * 1024 * 1024
-	StateVersion          = 3
+	StateVersion          = 4
 	NoActiveRepoMessage   = "No active repository. Use `/create` or `/set` first."
 	GoogleCredentialsPath = "/root/.gcp-credentials.json"
 )
@@ -88,7 +89,8 @@ type Config struct {
 	VertexProject     string
 	VertexLocation    string
 	CredentialsJSON   string
-	HostReposDir      string
+	ReposDir          string
+	UploadsDir        string
 	SSHKey            string
 	AllowedUserIDs    map[string]bool
 	GitUserName       string
@@ -145,7 +147,8 @@ func LoadFromEnv(getenv func(string) string) (*Config, error) {
 		VertexProject:     vertexProject,
 		VertexLocation:    vertexLocation,
 		CredentialsJSON:   getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"),
-		HostReposDir:      envOr(getenv, "HOST_REPOS_DIR", "/repos"),
+		ReposDir:          envOr(getenv, "REPOS_DIR", "/repos"),
+		UploadsDir:        envOr(getenv, "UPLOADS_DIR", UploadDir),
 		SSHKey:            getenv("OPENCODE_SSH_KEY"),
 		AllowedUserIDs:    allowed,
 		GitUserName:       getenv("GIT_USER_NAME"),

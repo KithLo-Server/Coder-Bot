@@ -22,7 +22,7 @@ func TestSaveLoadRoundTripPreservesOrderAndVariant(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	s := New()
 	m1 := "high"
-	s.Repos.Set("zeta", &Repo{URL: "u1", ContainerID: "c1", Model: "m1", Variant: &m1, VariantSet: true})
+	s.Repos.Set("zeta", &Repo{URL: "u1", ContainerID: "c1", ShellContainerID: "s1", Model: "m1", Variant: &m1, VariantSet: true})
 	s.Repos.Set("alpha", &Repo{URL: "u2", ContainerID: "c2"})
 	s.Repos.Get("alpha")
 	alpha, _ := s.Repos.Get("alpha")
@@ -43,6 +43,9 @@ func TestSaveLoadRoundTripPreservesOrderAndVariant(t *testing.T) {
 	zeta, _ := loaded.Repos.Get("zeta")
 	if !zeta.VariantSet || zeta.Variant == nil || *zeta.Variant != "high" {
 		t.Fatalf("variant lost: %+v", zeta)
+	}
+	if zeta.ContainerID != "c1" || zeta.ShellContainerID != "s1" {
+		t.Fatalf("container ids lost: %+v", zeta)
 	}
 	if loaded.ActiveContext[7] != "zeta" {
 		t.Fatalf("active = %+v", loaded.ActiveContext)
@@ -67,6 +70,9 @@ func TestLoadVersion2ClearsModel(t *testing.T) {
 	if repo.Model != "" || repo.VariantSet {
 		t.Fatalf("model not cleared: %+v", repo)
 	}
+	if repo.ContainerID != "" || repo.ShellContainerID != "" {
+		t.Fatalf("stale container ids kept: %+v", repo)
+	}
 }
 
 func TestLoadNormalizesModelMountsAndContext(t *testing.T) {
@@ -86,6 +92,9 @@ func TestLoadNormalizesModelMountsAndContext(t *testing.T) {
 	a, _ := loaded.Repos.Get("a")
 	if a.Model != "" || a.VariantSet || len(a.Mounts) != 1 || a.Mounts[0] != "b" {
 		t.Fatalf("a = %+v", a)
+	}
+	if a.ContainerID != "" || a.ShellContainerID != "" {
+		t.Fatalf("v3 container ids should be migrated away: %+v", a)
 	}
 	b, _ := loaded.Repos.Get("b")
 	if b.VariantSet || b.Variant != nil {

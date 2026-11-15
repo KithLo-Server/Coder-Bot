@@ -74,6 +74,7 @@ func TestAuthorization(t *testing.T) {
 }
 
 func TestContainerPathHelpers(t *testing.T) {
+	env := newTestEnv(t)
 	cases := map[string]string{
 		"git@github.com:owner/repo.git": "https://github.com/owner/repo",
 		"https://host/owner/repo.git/":  "https://host/owner/repo",
@@ -84,10 +85,10 @@ func TestContainerPathHelpers(t *testing.T) {
 			t.Fatalf("NormalizeRepoURL(%q) = %q, want %q", input, got, want)
 		}
 	}
-	if got := ResolveContainerPath("a/../b", "repo"); got != "/workspace/repo/b" {
+	if got := env.app.ResolveBasePath("a/../b", "repo"); got != "/repos/repo/b" {
 		t.Fatalf("resolved = %q", got)
 	}
-	if got := ResolveContainerPath("/tmp/x", "repo"); got != "/tmp/x" {
+	if got := env.app.ResolveBasePath("/tmp/x", "repo"); got != "/tmp/x" {
 		t.Fatalf("absolute = %q", got)
 	}
 }

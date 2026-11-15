@@ -12,7 +12,7 @@ func TestRouterDispatchesCommandAndPlainText(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.repoShell("repo").execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		return docker.ExecResult{ExitCode: 0, Output: []byte("shell output")}, nil
 	}
 	env.app.Handle(env.ctx, env.message("/sh echo hi", 1))
@@ -30,7 +30,7 @@ func TestRouterCaptureBlocksCommandExecution(t *testing.T) {
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
 	executed := false
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		executed = true
 		return docker.ExecResult{}, nil
 	}
@@ -50,7 +50,7 @@ func TestRouterCaptionULStopsPhotoHandling(t *testing.T) {
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
 	env.tg.files["doc"] = []byte("data")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{ExitCode: 1}, nil
 		}
@@ -62,8 +62,8 @@ func TestRouterCaptionULStopsPhotoHandling(t *testing.T) {
 		Photo:    []telegram.PhotoSize{{FileID: "doc"}},
 	}}
 	env.app.Handle(env.ctx, update)
-	if len(env.shell.putPaths) != 1 {
-		t.Fatalf("expected upload, putPaths = %+v", env.shell.putPaths)
+	if len(env.base.putPaths) != 1 {
+		t.Fatalf("expected upload, putPaths = %+v", env.base.putPaths)
 	}
 }
 

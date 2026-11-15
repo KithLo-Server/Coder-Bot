@@ -125,6 +125,16 @@ func (a *App) WorkerEnvironment() map[string]string {
 	if a.Cfg.CredentialsJSON != "" {
 		env["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = a.Cfg.CredentialsJSON
 	}
+	return a.addGitEnvironment(env)
+}
+
+// ShellEnvironment configures a per-repository shell without OpenCode or
+// provider credentials.
+func (a *App) ShellEnvironment() map[string]string {
+	return a.addGitEnvironment(map[string]string{})
+}
+
+func (a *App) addGitEnvironment(env map[string]string) map[string]string {
 	if a.Cfg.SSHKey != "" {
 		env["OPENCODE_SSH_KEY"] = a.Cfg.SSHKey
 	}

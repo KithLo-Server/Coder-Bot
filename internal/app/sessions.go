@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -317,13 +318,9 @@ func (a *App) HandlePhoto(ctx context.Context, update *telegram.Update, args []s
 		return err
 	}
 	defer release()
-	shell, err := a.GetShellContainer(lockCtx)
-	if err != nil || shell == nil {
-		_, err := a.replyMarkdown(lockCtx, update, config.NoActiveRepoMessage)
-		return err
-	}
+	baseContainer := a.BaseContainer()
 	_ = a.Telegram.SendChatAction(lockCtx, chatID, "typing")
-	status, err := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Uploading image to `%s` container...", name))
+	status, err := a.replyMarkdown(lockCtx, update, "Uploading image to the upload volume...")
 	if err != nil {
 		return err
 	}
@@ -332,13 +329,18 @@ func (a *App) HandlePhoto(ctx context.Context, update *telegram.Update, args []s
 		a.editStatus(lockCtx, status, fmt.Sprintf("Failed to process image: `%v`", err))
 		return nil
 	}
-	filename := TelegramUploadName(".jpg")
-	if err := CopyToContainer(lockCtx, shell, data, filename, repoWorkspace(name)); err != nil {
+	if err := EnsureContainerDirectory(lockCtx, baseContainer, a.Cfg.UploadsDir); err != nil {
 		a.editStatus(lockCtx, status, fmt.Sprintf("Failed to process image: `%v`", err))
 		return nil
 	}
-	a.editStatus(lockCtx, status, fmt.Sprintf("Image saved as `%s`. Running OpenCode in *%s* mode...", filename, strings.ToUpper(mode)))
-	fullPrompt := fmt.Sprintf("Inspect the uploaded image at '%s'. %s", filename, prompt)
+	filename := TelegramUploadName(".jpg")
+	if err := CopyToContainer(lockCtx, baseContainer, data, filename, a.Cfg.UploadsDir); err != nil {
+		a.editStatus(lockCtx, status, fmt.Sprintf("Failed to process image: `%v`", err))
+		return nil
+	}
+	imagePath := path.Join(a.Cfg.UploadsDir, filename)
+	a.editStatus(lockCtx, status, fmt.Sprintf("Image saved as `%s`. Running OpenCode in *%s* mode...", imagePath, strings.ToUpper(mode)))
+	fullPrompt := fmt.Sprintf("Inspect the uploaded image at '%s'. %s", imagePath, prompt)
 	a.DeleteMessageBestEffort(lockCtx, status.ChatID, status.ID)
 	return a.RunOpencodeTaskOnMessage(lockCtx, chatID, update.Message, fullPrompt, mode, "image_inspection", name)
 }

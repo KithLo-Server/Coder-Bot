@@ -78,7 +78,7 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HostReposDir != "/repos" || cfg.StateFile != "/tmp/data/repos_state.json" {
+	if cfg.ReposDir != "/repos" || cfg.UploadsDir != "/upload" || cfg.StateFile != "/tmp/data/repos_state.json" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.ReadTimeout.Seconds() != 60 || cfg.MediaWriteTimeout.Seconds() != 300 || cfg.VertexLocation != "global" {

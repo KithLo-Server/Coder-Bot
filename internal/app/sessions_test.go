@@ -223,10 +223,10 @@ func TestPhotoUploadsAndRunsBuild(t *testing.T) {
 	if err := env.app.HandlePhoto(env.ctx, update, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(env.shell.putPaths) != 1 || env.shell.putPaths[0] != "/workspace/repo" {
-		t.Fatalf("put paths = %+v", env.shell.putPaths)
+	if len(env.base.putPaths) != 1 || env.base.putPaths[0] != "/upload" {
+		t.Fatalf("put paths = %+v", env.base.putPaths)
 	}
-	if !strings.Contains(command, "--agent build") || !strings.Contains(command, "Inspect the uploaded image") || !strings.Contains(command, "fix this") {
+	if !strings.Contains(command, "--agent build") || !strings.Contains(command, "Inspect the uploaded image") || !strings.Contains(command, "/upload/") || !strings.Contains(command, "fix this") {
 		t.Fatalf("command = %s", command)
 	}
 }

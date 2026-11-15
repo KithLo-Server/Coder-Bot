@@ -36,7 +36,7 @@ func tarFile(name string, data []byte) []byte {
 func TestCreateClonesAndCreatesWorker(t *testing.T) {
 	env := newTestEnv(t)
 	var clones int
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		switch {
 		case inspectScript(options):
 			return docker.ExecResult{Output: []byte("missing\n")}, nil
@@ -55,12 +55,19 @@ func TestCreateClonesAndCreatesWorker(t *testing.T) {
 	if env.app.ActiveRepo(1) != "repo" {
 		t.Fatal("repo should be active")
 	}
-	if len(env.docker.runCalls) != 1 {
+	if len(env.docker.runCalls) != 2 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
 	run := env.docker.runCalls[0]
 	if run.Image != "ghcr.io/kithlo-server/coder-worker:latest" || run.Name != "opencode_repo" || run.Volumes[0].Target != "/workspace" {
 		t.Fatalf("run options = %+v", run)
+	}
+	shellRun := env.docker.runCalls[1]
+	if shellRun.Image != "ghcr.io/kithlo-server/coder-shell:latest" || shellRun.Name != "opencode_shell_repo" {
+		t.Fatalf("shell run options = %+v", shellRun)
+	}
+	if _, ok := shellRun.Environment["DEEPSEEK_API_KEY"]; ok {
+		t.Fatalf("shell environment must not include OpenCode tokens: %+v", shellRun.Environment)
 	}
 	if _, ok := run.Environment["OPENCODE_MODEL"]; ok {
 		t.Fatalf("worker environment must not include OPENCODE_MODEL: %+v", run.Environment)
@@ -78,7 +85,7 @@ func TestCreateClonesAndCreatesWorker(t *testing.T) {
 
 func TestCreateRefusesNonGitAndRemovesWorker(t *testing.T) {
 	env := newTestEnv(t)
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("non-git\n")}, nil
 		}
@@ -135,7 +142,7 @@ func TestMountAndUnmountRecreateWorker(t *testing.T) {
 	if len(repo.Mounts) != 1 || repo.Mounts[0] != "other" {
 		t.Fatalf("mounts = %+v", repo.Mounts)
 	}
-	if len(env.docker.runCalls) != 1 {
+	if len(env.docker.runCalls) != 2 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
 	volumes := env.docker.runCalls[0].Volumes
@@ -167,7 +174,7 @@ func TestMountAndUnmountRecreateWorker(t *testing.T) {
 func TestReloadRecreatesWorkerAndSyncs(t *testing.T) {
 	env := newTestEnv(t)
 	worker := env.addRepo("repo")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("git\n")}, nil
 		}
@@ -185,7 +192,7 @@ func TestReloadRecreatesWorkerAndSyncs(t *testing.T) {
 	if worker.removed == 0 {
 		t.Fatal("old worker should be removed")
 	}
-	if len(env.docker.runCalls) != 1 {
+	if len(env.docker.runCalls) != 2 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
 	repo, _ := env.app.Repo("repo")
@@ -201,7 +208,7 @@ func TestReloadAllSummarizes(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("one")
 	env.addRepo("two")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("git\n")}, nil
 		}
@@ -217,7 +224,7 @@ func TestReloadAllSummarizes(t *testing.T) {
 		return docker.ExecResult{}, nil
 	}
 	env.app.CmdReloadAll(env.ctx, env.message("/reloadall", 1), nil)
-	if len(env.docker.runCalls) != 2 {
+	if len(env.docker.runCalls) != 4 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
 	last := env.tg.edits[len(env.tg.edits)-1].Text
@@ -242,7 +249,7 @@ func TestPurgeSafetyAndSuccess(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("repo")
 	statusOutput := ""
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		switch {
 		case inspectScript(options):
 			return docker.ExecResult{Output: []byte("git\n")}, nil
@@ -285,9 +292,9 @@ func TestDownloadFileAndDirectory(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
-	env.shell.archives["/workspace/repo/README.md"] = tarFile("README.md", []byte("hello"))
+	env.base.archives["/repos/repo/README.md"] = tarFile("README.md", []byte("hello"))
 	var kind = "file"
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{Output: []byte(kind + "\n")}, nil
 		}
@@ -299,7 +306,7 @@ func TestDownloadFileAndDirectory(t *testing.T) {
 	}
 
 	kind = "dir"
-	env.shell.stream = ioNopCloser("tarball")
+	env.base.stream = ioNopCloser("tarball")
 	env.app.CmdDL(env.ctx, env.message("/dl .", 1), []string{"."})
 	if len(env.tg.documents) != 2 || string(env.tg.documentRaw) != "tarball" || !strings.Contains(env.tg.documents[1].Text, "compressed") {
 		t.Fatalf("directory = %+v", env.tg.documents)
@@ -317,7 +324,7 @@ func TestUploadAttachment(t *testing.T) {
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
 	env.tg.files["doc"] = []byte("payload")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{ExitCode: 1}, nil
 		}
@@ -330,10 +337,10 @@ func TestUploadAttachment(t *testing.T) {
 	if err := env.app.CmdUL(env.ctx, update, []string{"docs/file.txt"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(env.shell.putPaths) != 1 || env.shell.putPaths[0] != "/workspace/repo/docs" {
-		t.Fatalf("put paths = %+v", env.shell.putPaths)
+	if len(env.base.putPaths) != 1 || env.base.putPaths[0] != "/repos/repo/docs" {
+		t.Fatalf("put paths = %+v", env.base.putPaths)
 	}
-	if !strings.Contains(string(env.shell.putData[0]), "payload") {
+	if !strings.Contains(string(env.base.putData[0]), "payload") {
 		t.Fatal("archive missing payload")
 	}
 	if !strings.Contains(env.tg.edits[len(env.tg.edits)-1].Text, "Uploaded `file.txt`") {
@@ -364,7 +371,7 @@ func TestCreateRefusesRemoteMismatchAndWorkspaceKinds(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newTestEnv(t)
-			env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+			env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 				if inspectScript(options) {
 					return docker.ExecResult{Output: []byte(tc.status + "\n")}, nil
 				}
@@ -388,7 +395,7 @@ func TestCreateRefusesRemoteMismatchAndWorkspaceKinds(t *testing.T) {
 func TestCreateUpdatesExistingMatchingClone(t *testing.T) {
 	env := newTestEnv(t)
 	var pull bool
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		script := options.Cmd[len(options.Cmd)-1]
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("git\n")}, nil
@@ -416,7 +423,7 @@ func TestCreateUpdatesExistingMatchingClone(t *testing.T) {
 func TestPurgeMissingCheckoutRemovesState(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("repo")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("missing\n")}, nil
 		}
@@ -436,7 +443,7 @@ func TestUploadTrailingSlashOnFileIsRejected(t *testing.T) {
 	env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
 	env.tg.files["doc"] = []byte("payload")
-	env.shell.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if describeScript(options) {
 			return docker.ExecResult{Output: []byte("file\n")}, nil
 		}

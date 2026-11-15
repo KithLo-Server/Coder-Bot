@@ -468,14 +468,7 @@ func (a *App) CmdExec(ctx context.Context, update *telegram.Update, args []strin
 			a.Logger.Printf("Command %q of set %q failed: %v", savedCommand, name, err)
 			continue
 		}
-		shell, err := a.GetShellContainer(lockCtx)
-		if err != nil || shell == nil {
-			release()
-			a.DeleteMessageBestEffort(lockCtx, status.ChatID, status.ID)
-			_, replyErr := a.replyMarkdown(lockCtx, update, config.NoActiveRepoMessage)
-			return replyErr
-		}
-		_, execErr := a.ExecuteCancellable(lockCtx, shell, command, chatID, activeRepo, repoWorkspace(activeRepo))
+		_, execErr := a.ExecuteCancellable(lockCtx, a.BaseContainer(), command, chatID, activeRepo, a.repoBasePath(activeRepo))
 		release()
 		if execErr == ErrRunCancelled {
 			cancelled = true

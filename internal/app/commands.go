@@ -53,15 +53,28 @@ func (a *App) RemovePendingPlanButton(ctx context.Context, chatID int64) {
 	}
 }
 
-func (a *App) removeRepoContainer(ctx context.Context, repo *state.Repo) {
-	if repo == nil || repo.ContainerID == "" {
-		return
+func (a *App) removeRepoContainers(ctx context.Context, name string, repo *state.Repo) {
+	references := []string{workerContainerName(name), shellContainerName(name)}
+	if repo != nil {
+		references = append(references, repo.ContainerID, repo.ShellContainerID)
 	}
-	container, err := a.Docker.GetContainer(ctx, repo.ContainerID)
-	if err != nil {
-		return
+	seenReferences := make(map[string]bool)
+	seenIDs := make(map[string]bool)
+	for _, reference := range references {
+		if reference == "" || seenReferences[reference] {
+			continue
+		}
+		seenReferences[reference] = true
+		container, err := a.Docker.GetContainer(ctx, reference)
+		if err != nil {
+			continue
+		}
+		if seenIDs[container.ID()] {
+			continue
+		}
+		seenIDs[container.ID()] = true
+		a.RemoveContainer(ctx, container)
 	}
-	a.RemoveContainer(ctx, container)
 }
 
 func (a *App) resetRepoSessions(ctx context.Context, name string) {
@@ -107,19 +120,26 @@ func (a *App) forgetRepo(ctx context.Context, name string) {
 	a.Save()
 }
 
-func (a *App) workerVolumes(name string) []docker.Volume {
-	volumes := []docker.Volume{{
-		Source: path.Join(a.Cfg.HostReposDir, name),
-		Target: config.WorkspaceDir,
-		Mode:   "rw",
-	}}
+func (a *App) repoVolumes(name string) []docker.Volume {
+	volumes := []docker.Volume{
+		{
+			Source: a.repoBasePath(name),
+			Target: config.WorkspaceDir,
+			Mode:   "rw",
+		},
+		{
+			Source: a.Cfg.UploadsDir,
+			Target: config.UploadDir,
+			Mode:   "ro",
+		},
+	}
 	repo, hasRepo := a.Repo(name)
 	if !hasRepo {
 		return volumes
 	}
 	for _, mount := range repo.Mounts {
 		volumes = append(volumes, docker.Volume{
-			Source: path.Join(a.Cfg.HostReposDir, mount),
+			Source: path.Join(a.Cfg.ReposDir, mount),
 			Target: config.MountDir + "/" + mount,
 			Mode:   "rw",
 		})
@@ -128,33 +148,71 @@ func (a *App) workerVolumes(name string) []docker.Volume {
 }
 
 func (a *App) createWorkerContainer(ctx context.Context, name string) (docker.Container, error) {
-	env := a.WorkerEnvironment()
 	return a.Docker.RunContainer(ctx, docker.RunOptions{
 		Image:         config.WorkerImage,
-		Name:          "opencode_" + name,
-		Environment:   env,
-		Volumes:       a.workerVolumes(name),
+		Name:          workerContainerName(name),
+		Environment:   a.WorkerEnvironment(),
+		Volumes:       a.repoVolumes(name),
 		WorkingDir:    config.WorkspaceDir,
 		RestartPolicy: "unless-stopped",
 	})
 }
 
-func (a *App) recreateWorker(ctx context.Context, name string) (docker.Container, error) {
+func (a *App) createShellContainer(ctx context.Context, name string) (docker.Container, error) {
+	return a.Docker.RunContainer(ctx, docker.RunOptions{
+		Image:         config.ShellImage,
+		Name:          shellContainerName(name),
+		Environment:   a.ShellEnvironment(),
+		Volumes:       a.repoVolumes(name),
+		WorkingDir:    config.WorkspaceDir,
+		RestartPolicy: "unless-stopped",
+	})
+}
+
+func (a *App) ensureRepoContainers(ctx context.Context, name string) (docker.Container, docker.Container, error) {
 	repo, _ := a.Repo(name)
-	if repo != nil && repo.ContainerID != "" {
-		a.removeRepoContainer(ctx, repo)
+	workerID, shellID := "", ""
+	if repo != nil {
+		workerID = repo.ContainerID
+		shellID = repo.ShellContainerID
 	}
-	container, err := a.createWorkerContainer(ctx, name)
+	worker, err := a.getRunningContainer(ctx, workerID, workerContainerName(name))
+	if err != nil {
+		return nil, nil, err
+	}
+	if worker == nil {
+		worker, err = a.createWorkerContainer(ctx, name)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	shell, err := a.getRunningContainer(ctx, shellID, shellContainerName(name))
+	if err != nil {
+		return worker, nil, err
+	}
+	if shell == nil {
+		shell, err = a.createShellContainer(ctx, name)
+		if err != nil {
+			return worker, nil, err
+		}
+	}
+	return worker, shell, nil
+}
+
+func (a *App) recreateRepoContainers(ctx context.Context, name string) (docker.Container, error) {
+	repo, _ := a.Repo(name)
+	a.removeRepoContainers(ctx, name, repo)
+	worker, shell, err := a.ensureRepoContainers(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	repo, ok := a.Repo(name)
-	if !ok {
+	if repo == nil {
 		repo = &state.Repo{}
 	}
-	repo.ContainerID = container.ID()
+	repo.ContainerID = worker.ID()
+	repo.ShellContainerID = shell.ID()
 	a.SetRepo(name, repo)
-	return container, nil
+	return worker, nil
 }
 
 type setupFailure struct {
@@ -163,58 +221,25 @@ type setupFailure struct {
 }
 
 func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, remoteURL string) (bool, bool) {
-	repoDir := path.Join(a.Cfg.HostReposDir, name)
+	baseContainer := a.BaseContainer()
+	repoDir := a.repoBasePath(name)
 
-	var container docker.Container
-	reused, err := a.Docker.GetContainer(ctx, "opencode_"+name)
-	if err == nil {
-		statusValue, statusErr := reused.Status(ctx)
-		if statusErr != nil {
-			a.editStatus(ctx, status, fmt.Sprintf("Error during setup: `%v`", statusErr))
-			return false, false
-		}
-		if statusValue != "running" {
-			if err := reused.Start(ctx); err != nil {
-				a.editStatus(ctx, status, fmt.Sprintf("Error during setup: `%v`", err))
-				return false, false
-			}
-		}
-		container = reused
-		a.Logger.Printf("Reusing existing container %s for repo %s", reused.Name(), name)
-	} else if errors.Is(err, docker.ErrNotFound) {
-		container, err = a.createWorkerContainer(ctx, name)
-		if err != nil {
-			a.Logger.Printf("Error creating container: %v", err)
-			a.RemoveContainer(ctx, container)
-			a.editStatus(ctx, status, fmt.Sprintf("Error during setup: `%v`", err))
-			return false, false
-		}
-	} else {
-		a.Logger.Printf("Error creating container: %v", err)
+	worker, shell, err := a.ensureRepoContainers(ctx, name)
+	if err != nil {
+		a.Logger.Printf("Error creating containers: %v", err)
 		a.editStatus(ctx, status, fmt.Sprintf("Error during setup: `%v`", err))
 		return false, false
 	}
 
 	fail := func(failure setupFailure) (bool, bool) {
 		if failure.dropContainer {
-			a.RemoveContainer(ctx, container)
+			a.removeRepoContainers(ctx, name, nil)
 		}
 		a.editStatus(ctx, status, failure.message)
 		return false, false
 	}
 
-	shell, err := a.GetShellContainer(ctx)
-	if err != nil {
-		a.Logger.Printf("Error getting shell container: %v", err)
-	}
-	if shell == nil {
-		return fail(setupFailure{
-			message:       "The shared shell container is not available. Refusing to set up `" + name + "`.",
-			dropContainer: true,
-		})
-	}
-
-	workspace, err := InspectWorkspace(ctx, shell, repoWorkspace(name))
+	workspace, err := InspectWorkspace(ctx, baseContainer, repoDir)
 	if err != nil {
 		a.Logger.Printf("Error inspecting workspace: %v", err)
 	}
@@ -237,10 +262,20 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 		})
 	}
 
-	workspacePath := repoWorkspace(name)
+	if workspace == "missing" {
+		if err := EnsureContainerDirectory(ctx, baseContainer, repoDir); err != nil {
+			return fail(setupFailure{
+				message:       fmt.Sprintf("Could not prepare `%s`: `%v`", repoDir, err),
+				dropContainer: true,
+			})
+		}
+		workspace = "empty"
+	}
+
+	workspacePath := repoDir
 	if workspace == "git" {
 		a.editStatus(ctx, status, fmt.Sprintf("Verifying remote of existing clone for `%s`...", name))
-		remoteResult, _ := RunGit(ctx, shell, workspacePath, []string{"config", "--get", "remote.origin.url"}, nil)
+		remoteResult, _ := RunGit(ctx, baseContainer, workspacePath, []string{"config", "--get", "remote.origin.url"}, nil)
 		existingURL := strings.TrimSpace(string(remoteResult.Output))
 		if remoteResult.ExitCode != 0 || existingURL == "" {
 			return fail(setupFailure{message: fmt.Sprintf("Existing directory `%s` is a git repository without an `origin` remote. "+
@@ -251,15 +286,15 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 				"*existing:* `%s`\n*requested:* `%s`\nRefusing to set up `%s`.", name, existingURL, remoteURL, name)})
 		}
 		a.editStatus(ctx, status, fmt.Sprintf("Existing clone found for `%s` with matching remote. Pulling latest changes...", name))
-		updateResult, _ := RunGit(ctx, shell, workspacePath, []string{"pull", "--ff-only"}, []string{"rebase.autoStash=true"})
+		updateResult, _ := RunGit(ctx, baseContainer, workspacePath, []string{"pull", "--ff-only"}, []string{"rebase.autoStash=true"})
 		if updateResult.ExitCode != 0 {
 			details := string(updateResult.Output)
 			return fail(setupFailure{message: fmt.Sprintf("Could not update existing repository `%s`:\n%s\n"+
 				"Resolve the conflict (or remove the directory) and try again.", name, opencode.FormatUntrustedOutput(details, 2000))})
 		}
 	} else {
-		a.editStatus(ctx, status, fmt.Sprintf("Cloning `%s` into container...", remoteURL))
-		cloneResult, _ := RunGit(ctx, shell, workspacePath, []string{"clone", remoteURL, "."}, nil)
+		a.editStatus(ctx, status, fmt.Sprintf("Cloning `%s` into %s...", remoteURL, repoDir))
+		cloneResult, _ := RunGit(ctx, baseContainer, workspacePath, []string{"clone", remoteURL, "."}, nil)
 		if cloneResult.ExitCode != 0 {
 			details := string(cloneResult.Output)
 			return fail(setupFailure{message: "Failed to clone repository:\n" + opencode.FormatUntrustedOutput(details, 2000)})
@@ -290,7 +325,8 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 		}
 	}
 	existing.URL = remoteURL
-	existing.ContainerID = container.ID()
+	existing.ContainerID = worker.ID()
+	existing.ShellContainerID = shell.ID()
 	a.SetRepo(name, existing)
 	return true, workspace == "git"
 }
@@ -377,25 +413,37 @@ func (a *App) CmdInfo(ctx context.Context, update *telegram.Update, args []strin
 		return err
 	}
 	repo, _ := a.Repo(name)
-	containerStatus := "Unknown"
-	container, err := a.Docker.GetContainer(ctx, repo.ContainerID)
-	if err == nil {
-		if status, statusErr := container.Status(ctx); statusErr == nil {
-			containerStatus = status
-		}
-	} else if errors.Is(err, docker.ErrNotFound) {
-		containerStatus = "Container Not Found"
-	}
+	workerStatus := a.containerStatus(ctx, repo.ContainerID, workerContainerName(name))
+	shellStatus := a.containerStatus(ctx, repo.ShellContainerID, shellContainerName(name))
 	modelID := a.ModelForRepo(name)
 	label := a.Cfg.Catalog.Label(modelID)
 	variantLine := ""
 	if variant := a.VariantForRepo(name); variant != nil {
 		variantLine = fmt.Sprintf("\n**Variant:** `%s`", *variant)
 	}
-	message := fmt.Sprintf("**Active Context:** `%s`\n**Remote URL:** %s\n**Container Status:** `%s`\n**Model:** %s (`%s`)%s",
-		name, repo.URL, containerStatus, label, modelID, variantLine)
-	_, err = a.replyMarkdown(ctx, update, message)
+	message := fmt.Sprintf("**Active Context:** `%s`\n**Remote URL:** %s\n**Worker Status:** `%s`\n**Shell Status:** `%s`\n**Model:** %s (`%s`)%s",
+		name, repo.URL, workerStatus, shellStatus, label, modelID, variantLine)
+	_, err := a.replyMarkdown(ctx, update, message)
 	return err
+}
+
+func (a *App) containerStatus(ctx context.Context, id, name string) string {
+	reference := id
+	if reference == "" {
+		reference = name
+	}
+	container, err := a.Docker.GetContainer(ctx, reference)
+	if err != nil {
+		if errors.Is(err, docker.ErrNotFound) {
+			return "Container Not Found"
+		}
+		return "Unknown"
+	}
+	status, err := container.Status(ctx)
+	if err != nil {
+		return "Unknown"
+	}
+	return status
 }
 
 // CmdList implements /list.
@@ -423,11 +471,11 @@ func (a *App) CmdList(ctx context.Context, update *telegram.Update, args []strin
 	return err
 }
 
-func safeWorkspacePath(name string) (string, bool) {
-	workspace := repoWorkspace(name)
+func (a *App) safeWorkspacePath(name string) (string, bool) {
+	workspace := a.repoBasePath(name)
 	normalized := path.Clean(workspace)
 	base := path.Base(normalized)
-	if path.Dir(normalized) != path.Clean(config.WorkspaceDir) || base == "" || base == "." || base == ".." {
+	if path.Dir(normalized) != path.Clean(a.Cfg.ReposDir) || base == "" || base == "." || base == ".." {
 		return "", false
 	}
 	return normalized, true
@@ -440,7 +488,7 @@ func (a *App) changeMount(ctx context.Context, update *telegram.Update, mount st
 		_, err := a.replyMarkdown(ctx, update, config.NoActiveRepoMessage)
 		return err
 	}
-	if _, ok := safeWorkspacePath(mount); !ok {
+	if _, ok := a.safeWorkspacePath(mount); !ok {
 		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Invalid repository name `%s`.", mount))
 		return err
 	}
@@ -503,7 +551,7 @@ func (a *App) changeMount(ctx context.Context, update *telegram.Update, mount st
 	}
 	repo.Mounts = newMounts
 	a.SetRepo(active, repo)
-	if _, err := a.recreateWorker(lockCtx, active); err != nil {
+	if _, err := a.recreateRepoContainers(lockCtx, active); err != nil {
 		action := "unmounting"
 		if adding {
 			action = "mounting"
@@ -576,9 +624,9 @@ func (a *App) CmdDelete(ctx context.Context, update *telegram.Update, args []str
 		a.editStatus(lockCtx, status, fmt.Sprintf("Repo `%s` does not exist.", name))
 		return nil
 	}
-	a.removeRepoContainer(lockCtx, repo)
+	a.removeRepoContainers(lockCtx, name, repo)
 	a.forgetRepo(lockCtx, name)
-	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` and its container have been removed.", name))
+	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` and its containers have been removed.", name))
 	return nil
 }
 
@@ -622,7 +670,7 @@ func (a *App) CmdPurge(ctx context.Context, update *telegram.Update, args []stri
 		return err
 	}
 	name := strings.TrimSpace(args[0])
-	workspacePath, ok := safeWorkspacePath(name)
+	workspacePath, ok := a.safeWorkspacePath(name)
 	if !ok {
 		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Refusing to purge `%s`: the name does not map to a repository directory.", name))
 		return err
@@ -637,15 +685,8 @@ func (a *App) CmdPurge(ctx context.Context, update *telegram.Update, args []stri
 	}
 	defer release()
 	repo, hadRepo := a.Repo(name)
-	shell, err := a.GetShellContainer(lockCtx)
-	if err != nil {
-		a.Logger.Printf("Error getting shell container: %v", err)
-	}
-	if shell == nil {
-		a.editStatus(lockCtx, status, fmt.Sprintf("The shared shell container is not available. Refusing to purge `%s`.", name))
-		return nil
-	}
-	workspace, _ := InspectWorkspace(lockCtx, shell, workspacePath)
+	baseContainer := a.BaseContainer()
+	workspace, _ := InspectWorkspace(lockCtx, baseContainer, workspacePath)
 	if workspace == "missing" && !hadRepo {
 		a.editStatus(lockCtx, status, fmt.Sprintf("No checkout named `%s` exists to purge.", name))
 		return nil
@@ -663,16 +704,16 @@ func (a *App) CmdPurge(ctx context.Context, update *telegram.Update, args []stri
 		return nil
 	}
 	if workspace == "git" {
-		if reason := a.unpushedChanges(lockCtx, shell, workspacePath); reason != "" {
+		if reason := a.unpushedChanges(lockCtx, baseContainer, workspacePath); reason != "" {
 			a.editStatus(lockCtx, status, fmt.Sprintf("Refusing to purge `%s`: %s.", name, reason))
 			return nil
 		}
 	}
 	if hadRepo {
-		a.removeRepoContainer(lockCtx, repo)
+		a.removeRepoContainers(lockCtx, name, repo)
 	}
 	if workspace != "missing" {
-		result, err := shell.Exec(lockCtx, docker.ExecOptions{
+		result, err := baseContainer.Exec(lockCtx, docker.ExecOptions{
 			Cmd:     []string{"/bin/bash", "-c", "rm -rf -- " + shellQuote(workspacePath)},
 			Workdir: "/",
 		})
@@ -699,7 +740,7 @@ func (a *App) reloadRepo(ctx context.Context, status *telegram.Message, name str
 	if !ok {
 		return false, false
 	}
-	a.removeRepoContainer(ctx, repo)
+	a.removeRepoContainers(ctx, name, repo)
 	a.resetRepoSessions(ctx, name)
 	ok, _ = a.setupRepo(ctx, status, name, repo.URL)
 	return ok, true
@@ -878,10 +919,10 @@ func uploadPathFromMessage(message *telegram.Message, args []string) string {
 	return strings.TrimSpace(strings.Join(args, " "))
 }
 
-func resolveUploadTarget(rawPath, existingKind, originalName, repoName string) (string, string, string) {
+func (a *App) resolveUploadTarget(rawPath, existingKind, originalName, repoName string) (string, string, string) {
 	trimmed := strings.TrimSpace(rawPath)
 	wantsDirectory := strings.HasSuffix(trimmed, "/") || strings.HasSuffix(trimmed, "\\")
-	resolved := ResolveContainerPath(trimmed, repoName)
+	resolved := a.ResolveBasePath(trimmed, repoName)
 	if wantsDirectory && existingKind == "file" {
 		return "", "", fmt.Sprintf("`%s` exists and is not a directory.", resolved)
 	}
@@ -926,27 +967,23 @@ func (a *App) CmdUL(ctx context.Context, update *telegram.Update, args []string)
 		return err
 	}
 	defer release()
-	shell, err := a.GetShellContainer(lockCtx)
-	if err != nil || shell == nil {
-		_, err := a.replyMarkdown(lockCtx, update, config.NoActiveRepoMessage)
-		return err
-	}
+	baseContainer := a.BaseContainer()
 	status, err := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Preparing upload to `%s`...", name))
 	if err != nil {
 		return err
 	}
-	resolved := ResolveContainerPath(rawPath, name)
-	kind, err := DescribeContainerPath(lockCtx, shell, resolved)
+	resolved := a.ResolveBasePath(rawPath, name)
+	kind, err := DescribeContainerPath(lockCtx, baseContainer, resolved)
 	if err != nil {
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
-	targetDir, filename, problem := resolveUploadTarget(rawPath, kind, originalName, name)
+	targetDir, filename, problem := a.resolveUploadTarget(rawPath, kind, originalName, name)
 	if problem != "" {
 		a.editStatus(lockCtx, status, problem)
 		return nil
 	}
-	if err := EnsureContainerDirectory(lockCtx, shell, targetDir); err != nil {
+	if err := EnsureContainerDirectory(lockCtx, baseContainer, targetDir); err != nil {
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
@@ -955,7 +992,7 @@ func (a *App) CmdUL(ctx context.Context, update *telegram.Update, args []string)
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
-	if err := CopyToContainer(lockCtx, shell, data, filename, targetDir); err != nil {
+	if err := CopyToContainer(lockCtx, baseContainer, data, filename, targetDir); err != nil {
 		a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to upload `%s`: `%v`", rawPath, err))
 		return nil
 	}
@@ -996,14 +1033,10 @@ func (a *App) CmdDL(ctx context.Context, update *telegram.Update, args []string)
 		return err
 	}
 	defer release()
-	shell, err := a.GetShellContainer(lockCtx)
-	if err != nil || shell == nil {
-		_, err := a.replyMarkdown(lockCtx, update, config.NoActiveRepoMessage)
-		return err
-	}
-	filePath := ResolveContainerPath(rawPath, name)
+	baseContainer := a.BaseContainer()
+	filePath := a.ResolveBasePath(rawPath, name)
 	_ = a.Telegram.SendChatAction(lockCtx, chatID, "upload_document")
-	kind, err := DescribeContainerPath(lockCtx, shell, filePath)
+	kind, err := DescribeContainerPath(lockCtx, baseContainer, filePath)
 	if err != nil {
 		_, err := a.replyMarkdown(lockCtx, update, fmt.Sprintf("Could not inspect `%s`: `%v`", filePath, err))
 		return err
@@ -1019,7 +1052,7 @@ func (a *App) CmdDL(ctx context.Context, update *telegram.Update, args []string)
 	var payload []byte
 	var downloadName, caption string
 	if kind == "file" {
-		payload, err = ReadFileFromContainer(lockCtx, shell, filePath)
+		payload, err = ReadFileFromContainer(lockCtx, baseContainer, filePath)
 		if err != nil {
 			a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to send `%s`: `%v`", filePath, err))
 			return nil
@@ -1034,7 +1067,7 @@ func (a *App) CmdDL(ctx context.Context, update *telegram.Update, args []string)
 		}
 		caption = fmt.Sprintf("`%s` (%s bytes)", filePath, commaInt(len(payload)))
 	} else {
-		payload, err = TarDirectoryInContainer(lockCtx, shell, filePath)
+		payload, err = TarDirectoryInContainer(lockCtx, baseContainer, filePath)
 		if err != nil {
 			a.reportStatus(lockCtx, update, status, fmt.Sprintf("Failed to send `%s`: `%v`", filePath, err))
 			return nil

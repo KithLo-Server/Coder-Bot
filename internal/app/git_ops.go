@@ -136,13 +136,9 @@ func (a *App) CmdPull(ctx context.Context, update *telegram.Update, args []strin
 		return err
 	}
 	defer release()
-	shell, err := a.GetShellContainer(lockCtx)
-	if err != nil || shell == nil {
-		a.editStatus(lockCtx, status, fmt.Sprintf("Shell container for `%s` is not available.", name))
-		return nil
-	}
+	baseContainer := a.BaseContainer()
 	_ = a.Telegram.SendChatAction(lockCtx, chatID, "typing")
-	pulled, conflicted, output := pullRebase(lockCtx, shell, repoWorkspace(name))
+	pulled, conflicted, output := pullRebase(lockCtx, baseContainer, a.repoBasePath(name))
 	var message string
 	switch {
 	case pulled:
@@ -170,13 +166,9 @@ func (a *App) CmdPush(ctx context.Context, update *telegram.Update, args []strin
 		return err
 	}
 	defer release()
-	shell, err := a.GetShellContainer(lockCtx)
-	if err != nil || shell == nil {
-		a.editStatus(lockCtx, status, fmt.Sprintf("Shell container for `%s` is not available.", name))
-		return nil
-	}
+	baseContainer := a.BaseContainer()
 	_ = a.Telegram.SendChatAction(lockCtx, chatID, "typing")
-	statusName, output := pushWithRebase(lockCtx, shell, repoWorkspace(name))
+	statusName, output := pushWithRebase(lockCtx, baseContainer, a.repoBasePath(name))
 	var message string
 	switch statusName {
 	case "ok":
