@@ -349,7 +349,7 @@ func (a *App) CmdCreate(ctx context.Context, update *telegram.Update, args []str
 	}
 
 	chatID, _ := messageTarget(update)
-	status, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Setting up container for `%s`...", name))
+	status, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Setting up repository `%s`...", name))
 	if err != nil {
 		return err
 	}
@@ -729,9 +729,9 @@ func (a *App) CmdPurge(ctx context.Context, update *telegram.Update, args []stri
 	case !hadRepo:
 		a.editStatus(lockCtx, status, fmt.Sprintf("Checkout `%s` was purged from disk.", name))
 	case workspace == "missing":
-		a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` had no checkout left on disk; its container and state were removed.", name))
+		a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` had no checkout left on disk; its containers and state were removed.", name))
 	default:
-		a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` was purged from disk and its container removed.", name))
+		a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` was purged from disk and its containers removed.", name))
 	}
 	return nil
 }
