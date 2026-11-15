@@ -120,3 +120,26 @@ func TestCancelRestartsUnresponsiveWorker(t *testing.T) {
 		t.Fatalf("messages = %+v", env.tg.messages)
 	}
 }
+
+func TestCancelSignalsBaseContainerWithoutRestartingIt(t *testing.T) {
+	env := newTestEnv(t)
+	env.addRepo("repo")
+	env.app.SetActiveContext(1, "repo")
+	runID := env.app.startRun(env.base.ID(), 1, "repo")
+	signalled := false
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+		if len(options.Cmd) == 3 && strings.Contains(options.Cmd[2], "OPENCODE_CANCEL_TOKEN") {
+			signalled = true
+			return docker.ExecResult{ExitCode: 0}, nil
+		}
+		return docker.ExecResult{}, nil
+	}
+	env.app.CmdCancel(env.ctx, env.message("/cancel", 1), nil)
+	if !signalled {
+		t.Fatal("the base container should have been signalled")
+	}
+	if env.base.restarted != 0 {
+		t.Fatal("the base container must never be restarted")
+	}
+	env.app.finishRun("repo", runID)
+}
