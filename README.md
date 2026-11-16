@@ -110,7 +110,7 @@ The bot reads configuration from environment variables. The Compose file passes 
 | `REPOS_DIR` | `/repos` | Repository checkout directory inside the base container. Compose mounts `${OPENCODE_DATA}/repos` here. |
 | `UPLOADS_DIR` | `/upload` | Shared upload directory inside the base container. Compose mounts `${OPENCODE_DATA}/uploads` here. |
 | `OPENCODE_SSH_KEY` | unset | SSH private key material written into the base, worker, and shell containers for git auth and commit signing. |
-| `DATA_DIR` | `/app/data` | Bot data directory. The state file lives here. |
+| `DATA_DIR` | `/app/data` | Bot data directory. The SQLite state database lives here. |
 | `GIT_USER_NAME` / `GIT_USER_EMAIL` | unset | Commit identity configured in the base, worker, and shell containers. |
 | `TELEGRAM_READ_TIMEOUT` | `60` | Telegram read timeout (seconds). |
 | `TELEGRAM_WRITE_TIMEOUT` | `300` | Telegram write timeout (seconds). |
@@ -254,7 +254,7 @@ Secrets and variables are supplied through GitHub Actions secrets/variables, not
 
 ## Data and security
 
-- Repository definitions, per-chat active contexts, and command sets are persisted in `$DATA_DIR/repos_state.json` (state version 4). Version-3 state is migrated by preserving repositories and clearing stale container IDs. OpenCode session IDs, pending prompts, and running-command records live in memory and are lost on restart.
+- Repository definitions, per-chat active contexts, and command sets are persisted in the SQLite database `$DATA_DIR/repos_state.db` (WAL mode; `-wal` and `-shm` sidecar files may appear alongside it). Existing `repos_state.json` files are not migrated and are ignored. OpenCode session IDs, pending prompts, and running-command records live in memory and are lost on restart.
 - The base container is privileged because it runs its own Docker daemon. The host Docker socket is not mounted into the base, worker, or shell containers.
 - Worker and shell containers are named `opencode_<repo>` and `opencode_shell_<repo>`. They are created on demand, removed by `/stop`, `/reload`, `/reloadall`, and `/purge`, and recreated on the next command that needs them.
 - Worker containers receive provider credentials. Shell containers receive only Git/SSH configuration and no OpenCode or provider tokens.
