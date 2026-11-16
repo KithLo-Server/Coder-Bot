@@ -24,7 +24,7 @@ Telegram  ──►  base bot container (Go, privileged, runs its own dockerd)
                     │     image: ghcr.io/kithlo-server/coder-worker:latest
                     │     /workspace = /repos/<repo>
                     │     /opt/<mount>, /upload
-                    │     OpenCode sessions
+                    │     /opencode/opencode.db (persisted)
                     │
                     └── per-repo shell: opencode_shell_<repo>
                           image: ghcr.io/kithlo-server/coder-shell:latest
@@ -159,11 +159,11 @@ The worker and shell images are fixed:
 | `/list` | List configured repositories and mark the active one. |
 | `/mount <name>` | Mount another configured repository's checkout at `/opt/<name>` in the active repository's worker and shell. |
 | `/unmount <name>` | Remove a repository previously mounted with `/mount` from the active worker and shell. |
-| `/stop <name>` | Stop and remove the repository's worker and shell containers and reset its OpenCode sessions, keeping its bot state and checkout on disk. |
+| `/stop <name>` | Stop and remove the repository's worker and shell containers, keeping its bot state, OpenCode sessions, and checkout on disk. |
 | `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously stopped or purged repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). |
-| `/reload <name>` | Stop and remove the worker and shell, refresh the checkout with a fast-forward pull in the base, and reset its OpenCode sessions. Containers start again on first use. |
-| `/reloadall` | Stop and remove the containers and refresh the checkout of every repository, resetting their OpenCode sessions. Containers start again on first use. |
-| `/upgrade` | Pull the latest worker and shell images, replace containers still running older images (resetting their OpenCode sessions), then prune unused old images. |
+| `/reload <name>` | Stop and remove the worker and shell, refresh the checkout with a fast-forward pull in the base, and keep its OpenCode sessions. Containers start again on first use. |
+| `/reloadall` | Stop and remove the containers and refresh the checkout of every repository, keeping their OpenCode sessions. Containers start again on first use. |
+| `/upgrade` | Pull the latest worker and shell images, replace containers still running older images while keeping their OpenCode sessions, then prune unused old images. |
 | `/dl <path>` | Download a file or a compressed directory (up to 50 MB) from the active checkout in the shell container. |
 | `/ul <path>` | Upload an attached file to a destination in the active checkout through the shell container. |
 | `/sh <command>` | Run a cancellable shell command in the active repository's shell container. |
@@ -182,7 +182,7 @@ Plain text messages run plan mode. Text starting with `#` runs build mode with t
 
 Paths passed to `/dl`, `/ul`, and `/sh` are resolved relative to `/workspace` inside the active repository's shell container unless they start with `/`.
 
-`/mount <name>` exposes another configured repository's checkout inside the active repository's worker and shell at `/opt/<name>`, so OpenCode sessions and `/sh` can read and edit it. Mounts are stored per repository and survive `/reload`. Because Docker bind mounts are fixed at container creation, mounting or unmounting recreates both child containers and starts a fresh OpenCode session (git state is untouched).
+`/mount <name>` exposes another configured repository's checkout inside the active repository's worker and shell at `/opt/<name>`, so OpenCode sessions and `/sh` can read and edit it. Mounts are stored per repository and survive `/reload`. Because Docker bind mounts are fixed at container creation, mounting or unmounting recreates both child containers; OpenCode sessions and git state are preserved.
 
 ### Plan mode and commits
 
@@ -210,14 +210,13 @@ Use `%1`, `%2`, … in saved lines to insert `/exec` arguments, and `%%` for a l
 cmd/bot/main.go        Startup validation, git setup, signals and polling
 base-entrypoint.sh     Starts the inner Docker daemon before the bot
 internal/config/       Environment configuration and the ordered model catalog
-internal/state/        Version-4 JSON persistence, migrations and normalization
-internal/ordered/      Insertion-ordered maps used for stable catalog/repo order
+internal/state/        SQLite persistence, schema migrations and normalization
 internal/opencode/     JSONL output parsing, session extraction and command building
 internal/telegram/     Telegram interface, update conversion and Bot API adapter
 internal/docker/       Docker interface and the official Docker SDK adapter
 internal/base/         Bot-container filesystem/process executor and git setup
 internal/locks/        Reentrant per-repository locks
-internal/app/          App state, handlers, routing and the in-memory run registry
+internal/app/          Handlers, routing, persistent lookups and the in-memory run registry
   app.go               Shared state, lookups and the base-container adapter
   helpers.go           Authorization, response delivery and container environments
   container.go         Docker helpers, file transfer, workspace inspection, runs
@@ -254,7 +253,8 @@ Secrets and variables are supplied through GitHub Actions secrets/variables, not
 
 ## Data and security
 
-- Repository definitions, per-chat active contexts, and command sets are persisted in the SQLite database `$DATA_DIR/repos_state.db` (WAL mode; `-wal` and `-shm` sidecar files may appear alongside it). Existing `repos_state.json` files are not migrated and are ignored. OpenCode session IDs, pending prompts, and running-command records live in memory and are lost on restart.
+- Repository definitions, per-chat active contexts, command sets, and OpenCode session IDs are persisted in the SQLite database `$DATA_DIR/repos_state.db` (WAL mode; `-wal` and `-shm` sidecar files may appear alongside it). Existing `repos_state.json` files are not migrated and are ignored. Pending prompts and running-command records live in memory and are lost on restart.
+- Each worker's OpenCode database is persisted under `$DATA_DIR/opencode/<repo>/opencode.db` and mounted at `/opencode/opencode.db` through `OPENCODE_DB`. It survives `/stop`, `/reload`, `/reloadall`, `/mount`, `/unmount`, and `/upgrade`; `/purge` removes it.
 - The base container is privileged because it runs its own Docker daemon. The host Docker socket is not mounted into the base, worker, or shell containers.
 - Worker and shell containers are named `opencode_<repo>` and `opencode_shell_<repo>`. They are created on demand, removed by `/stop`, `/reload`, `/reloadall`, and `/purge`, and recreated on the next command that needs them.
 - Worker containers receive provider credentials. Shell containers receive only Git/SSH configuration and no OpenCode or provider tokens.
@@ -262,7 +262,7 @@ Secrets and variables are supplied through GitHub Actions secrets/variables, not
 - `/upgrade` runs a system prune in the base's inner Docker daemon, so unrelated unused images there are removed as well.
 - API keys, the Vertex service-account JSON, and the SSH signing key are passed through environment variables. The SSH key is written into the base and child containers at startup; no credential file is stored on the host.
 - Repository files are untrusted input. Base commands operate on `/repos`, worker/shell commands operate on their mounted checkout, and `/upload` is read-only inside child containers.
-- Inner Docker images and container metadata persist in `${OPENCODE_DATA}/docker`. Back up that directory alongside repositories and uploads if you need to preserve them.
+- Inner Docker images and container metadata persist in `${OPENCODE_DATA}/docker`. Back up that directory alongside repositories, uploads, and `${OPENCODE_DATA}/data` if you need to preserve them.
 
 ## License
 
