@@ -34,7 +34,7 @@ func tarFile(name string, data []byte) []byte {
 	return buffer.Bytes()
 }
 
-func TestCreateClonesAndCreatesWorker(t *testing.T) {
+func TestCreateClonesWithoutContainers(t *testing.T) {
 	env := newTestEnv(t)
 	var clones int
 	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
@@ -56,25 +56,12 @@ func TestCreateClonesAndCreatesWorker(t *testing.T) {
 	if env.app.ActiveRepo(1) != "repo" {
 		t.Fatal("repo should be active")
 	}
-	if len(env.docker.runCalls) != 2 {
+	if len(env.docker.runCalls) != 0 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
-	run := env.docker.runCalls[0]
-	if run.Image != "ghcr.io/kithlo-server/coder-worker:latest" || run.Name != "opencode_repo" || run.Volumes[0].Target != "/workspace" {
-		t.Fatalf("run options = %+v", run)
-	}
-	shellRun := env.docker.runCalls[1]
-	if shellRun.Image != "ghcr.io/kithlo-server/coder-shell:latest" || shellRun.Name != "opencode_shell_repo" {
-		t.Fatalf("shell run options = %+v", shellRun)
-	}
-	if _, ok := shellRun.Environment["DEEPSEEK_API_KEY"]; ok {
-		t.Fatalf("shell environment must not include OpenCode tokens: %+v", shellRun.Environment)
-	}
-	if _, ok := run.Environment["OPENCODE_MODEL"]; ok {
-		t.Fatalf("worker environment must not include OPENCODE_MODEL: %+v", run.Environment)
-	}
-	if run.Environment["DEEPSEEK_API_KEY"] != "key" {
-		t.Fatalf("env = %+v", run.Environment)
+	repo, _ := env.app.Repo("repo")
+	if repo.ContainerID != "" || repo.ShellContainerID != "" {
+		t.Fatalf("container ids = %q/%q", repo.ContainerID, repo.ShellContainerID)
 	}
 	if _, err := os.Stat(env.app.Cfg.StateFile); err != nil {
 		t.Fatalf("state not saved: %v", err)
@@ -84,7 +71,7 @@ func TestCreateClonesAndCreatesWorker(t *testing.T) {
 	}
 }
 
-func TestCreateRefusesNonGitAndRemovesWorker(t *testing.T) {
+func TestCreateRefusesNonGitWithoutContainers(t *testing.T) {
 	env := newTestEnv(t)
 	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
@@ -96,9 +83,11 @@ func TestCreateRefusesNonGitAndRemovesWorker(t *testing.T) {
 	if env.app.RepoExists("repo") {
 		t.Fatal("non-git directory must be refused")
 	}
-	worker := env.docker.containers["opencode_repo"]
-	if worker.removed == 0 {
-		t.Fatal("worker should be removed")
+	if len(env.docker.runCalls) != 0 {
+		t.Fatalf("run calls = %d", len(env.docker.runCalls))
+	}
+	if _, exists := env.docker.containers[workerContainerName("repo")]; exists {
+		t.Fatal("worker should not be created")
 	}
 	if !strings.Contains(env.tg.edits[len(env.tg.edits)-1].Text, "not a git repository") {
 		t.Fatalf("edits = %+v", env.tg.edits)
@@ -172,7 +161,7 @@ func TestMountAndUnmountRecreateWorker(t *testing.T) {
 	}
 }
 
-func TestReloadRecreatesWorkerAndSyncs(t *testing.T) {
+func TestReloadStopsContainersAndSyncs(t *testing.T) {
 	env := newTestEnv(t)
 	worker := env.addRepo("repo")
 	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
@@ -193,12 +182,12 @@ func TestReloadRecreatesWorkerAndSyncs(t *testing.T) {
 	if worker.removed == 0 {
 		t.Fatal("old worker should be removed")
 	}
-	if len(env.docker.runCalls) != 2 {
+	if len(env.docker.runCalls) != 0 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
 	repo, _ := env.app.Repo("repo")
-	if repo.ContainerID != "new-1" {
-		t.Fatalf("container id = %q", repo.ContainerID)
+	if repo.ContainerID != "" || repo.ShellContainerID != "" {
+		t.Fatalf("container ids = %q/%q", repo.ContainerID, repo.ShellContainerID)
 	}
 	if env.app.ActiveRepo(1) != "repo" {
 		t.Fatal("reload should set active")
@@ -225,7 +214,7 @@ func TestReloadAllSummarizes(t *testing.T) {
 		return docker.ExecResult{}, nil
 	}
 	env.app.CmdReloadAll(env.ctx, env.message("/reloadall", 1), nil)
-	if len(env.docker.runCalls) != 4 {
+	if len(env.docker.runCalls) != 0 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
 	}
 	last := env.tg.edits[len(env.tg.edits)-1].Text

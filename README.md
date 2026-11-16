@@ -41,7 +41,7 @@ base binds:
 
 - The **base container** runs the bot process and a Docker daemon. The bot talks to that inner daemon through `/var/run/docker.sock`; the host Docker socket is not mounted.
 - Repository management and Git operations run directly in the base container against `/repos/<repo>`; `/dl` and `/ul` run in the repository's shell container against `/workspace`.
-- Each repository gets a long-lived **worker** (`opencode_<repo>`) and **shell** (`opencode_shell_<repo>`), both created through the base's inner daemon.
+- Each repository gets a **worker** (`opencode_<repo>`) and **shell** (`opencode_shell_<repo>`), both created on demand through the base's inner daemon and reused once running.
 - Only `/ask`, `/code`, plain text, `#`-prefixed text, and the OpenCode step of photo handling run in a worker. Only `/sh`, `/dl`, and `/ul` use a shell container.
 - A **per-repository lock** serializes work, while different repositories can run in parallel.
 - A **local Telegram Bot API server** is supported through `TELEGRAM_API_BASE_URL` and `TELEGRAM_API_FILE_BASE_URL`. Bot file transfers through `/dl` remain capped at 50 MB.
@@ -82,7 +82,7 @@ base binds:
 
    The bot image is built from the local `Dockerfile`; its runtime is based on Docker-in-Docker and includes Git, Bash, OpenSSH, and tar. Worker and shell images are pulled into the base's inner Docker daemon on demand. For local development, Go 1.26+ is required for the bot: `go build ./cmd/bot`.
 
-3. Message the bot. Start with `/create <name> <git-url>` to clone a repository, create its worker and shell, and select it.
+3. Message the bot. Start with `/create <name> <git-url>` to clone a repository and select it. Its worker and shell containers start on first use.
 
 ## Configuration
 
@@ -153,7 +153,7 @@ The worker and shell images are fixed:
 
 | Command | Description |
 | --- | --- |
-| `/create <name> <git-url>` | Clone a repository in the base container (or adopt an existing matching checkout), create its worker and shell, and make it active. |
+| `/create <name> <git-url>` | Clone a repository in the base container (or adopt an existing matching checkout) and make it active. Its worker and shell containers start on first use. |
 | `/set <name>` | Select an existing repository as the chat's active context. |
 | `/info` | Show the active repository, worker and shell status, and model. |
 | `/list` | List configured repositories and mark the active one. |
@@ -161,8 +161,8 @@ The worker and shell images are fixed:
 | `/unmount <name>` | Remove a repository previously mounted with `/mount` from the active worker and shell. |
 | `/stop <name>` | Stop and remove the repository's worker and shell containers and reset its OpenCode sessions, keeping its bot state and checkout on disk. |
 | `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously stopped or purged repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). |
-| `/reload <name>` | Recreate the worker and shell, refresh the checkout with a fast-forward pull in the base, and reset its OpenCode sessions. |
-| `/reloadall` | Recreate the containers and refresh the checkout of every repository, resetting their OpenCode sessions. |
+| `/reload <name>` | Stop and remove the worker and shell, refresh the checkout with a fast-forward pull in the base, and reset its OpenCode sessions. Containers start again on first use. |
+| `/reloadall` | Stop and remove the containers and refresh the checkout of every repository, resetting their OpenCode sessions. Containers start again on first use. |
 | `/upgrade` | Pull the latest worker and shell images, replace containers still running older images (resetting their OpenCode sessions), then prune unused old images. |
 | `/dl <path>` | Download a file or a compressed directory (up to 50 MB) from the active checkout in the shell container. |
 | `/ul <path>` | Upload an attached file to a destination in the active checkout through the shell container. |
@@ -256,7 +256,7 @@ Secrets and variables are supplied through GitHub Actions secrets/variables, not
 
 - Repository definitions, per-chat active contexts, and command sets are persisted in `$DATA_DIR/repos_state.json` (state version 4). Version-3 state is migrated by preserving repositories and clearing stale container IDs. OpenCode session IDs, pending prompts, and running-command records live in memory and are lost on restart.
 - The base container is privileged because it runs its own Docker daemon. The host Docker socket is not mounted into the base, worker, or shell containers.
-- Worker and shell containers are long-lived and named `opencode_<repo>` and `opencode_shell_<repo>`; deleting a repository removes both.
+- Worker and shell containers are named `opencode_<repo>` and `opencode_shell_<repo>`. They are created on demand, removed by `/stop`, `/reload`, `/reloadall`, and `/purge`, and recreated on the next command that needs them.
 - Worker containers receive provider credentials. Shell containers receive only Git/SSH configuration and no OpenCode or provider tokens.
 - Set `TELEGRAM_ALLOWED_USER_ID` to restrict access. Leaving it unset allows any Telegram user who finds the bot to use it.
 - `/upgrade` runs a system prune in the base's inner Docker daemon, so unrelated unused images there are removed as well.

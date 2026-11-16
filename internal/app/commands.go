@@ -216,26 +216,14 @@ func (a *App) recreateRepoContainers(ctx context.Context, name string) (docker.C
 }
 
 type setupFailure struct {
-	message       string
-	dropContainer bool
+	message string
 }
 
 func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, remoteURL string) (bool, bool) {
 	baseContainer := a.BaseContainer()
 	repoDir := a.repoBasePath(name)
 
-	worker, shell, err := a.ensureRepoContainers(ctx, name)
-	if err != nil {
-		a.Logger.Printf("Error creating containers: %v", err)
-		a.removeRepoContainers(ctx, name, nil)
-		a.editStatus(ctx, status, fmt.Sprintf("Error during setup: `%v`", err))
-		return false, false
-	}
-
 	fail := func(failure setupFailure) (bool, bool) {
-		if failure.dropContainer {
-			a.removeRepoContainers(ctx, name, nil)
-		}
 		a.editStatus(ctx, status, failure.message)
 		return false, false
 	}
@@ -247,27 +235,23 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 	switch workspace {
 	case "not-dir":
 		return fail(setupFailure{
-			message:       fmt.Sprintf("`%s` already exists and is not a directory. Refusing to set up `%s`.", repoDir, name),
-			dropContainer: true,
+			message: fmt.Sprintf("`%s` already exists and is not a directory. Refusing to set up `%s`.", repoDir, name),
 		})
 	case "non-git":
 		return fail(setupFailure{
-			message:       fmt.Sprintf("Directory `%s` is not empty and is not a git repository. Refusing to set up `%s`.", repoDir, name),
-			dropContainer: true,
+			message: fmt.Sprintf("Directory `%s` is not empty and is not a git repository. Refusing to set up `%s`.", repoDir, name),
 		})
 	case "git-locked":
 		return fail(setupFailure{
 			message: fmt.Sprintf("`%s` has a stale `index.lock` (another git process may be running). "+
 				"Refusing to set up `%s`.", repoDir, name),
-			dropContainer: true,
 		})
 	}
 
 	if workspace == "missing" {
 		if err := EnsureContainerDirectory(ctx, baseContainer, repoDir); err != nil {
 			return fail(setupFailure{
-				message:       fmt.Sprintf("Could not prepare `%s`: `%v`", repoDir, err),
-				dropContainer: true,
+				message: fmt.Sprintf("Could not prepare `%s`: `%v`", repoDir, err),
 			})
 		}
 		workspace = "empty"
@@ -326,8 +310,8 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 		}
 	}
 	existing.URL = remoteURL
-	existing.ContainerID = worker.ID()
-	existing.ShellContainerID = shell.ID()
+	existing.ContainerID = ""
+	existing.ShellContainerID = ""
 	a.SetRepo(name, existing)
 	return true, workspace == "git"
 }
@@ -374,7 +358,7 @@ func (a *App) CmdCreate(ctx context.Context, update *telegram.Update, args []str
 	if hadClone {
 		state = "updated"
 	}
-	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` %s and set as active context!\nModel configured: `%s`", name, state, a.ModelForRepo(name)))
+	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` %s and set as active context! Containers will start on first use.\nModel configured: `%s`", name, state, a.ModelForRepo(name)))
 	return nil
 }
 
