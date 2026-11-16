@@ -35,8 +35,8 @@ func TestSplitBotCommandAndExecTarget(t *testing.T) {
 func TestCommandSetFlowAndExec(t *testing.T) {
 	env := newTestEnv(t)
 	chatID := int64(1)
-	env.app.SetActiveContext(chatID, "repo")
 	env.addRepo("repo")
+	env.app.SetActiveContext(chatID, "repo")
 
 	update := env.message("/cmd deploy", chatID)
 	if err := env.app.CmdCmd(env.ctx, update, []string{"deploy"}); err != nil {

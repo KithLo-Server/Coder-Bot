@@ -58,7 +58,6 @@ func (a *App) CmdUpgrade(ctx context.Context, update *telegram.Update, args []st
 		}
 		if replacedWorker || replacedShell {
 			a.resetRepoSessions(lockCtx, name)
-			a.Save()
 		}
 		if replacedWorker {
 			workerReplaced++
@@ -125,9 +124,9 @@ func (a *App) upgradeRepoContainers(ctx context.Context, name, workerImage, shel
 	if err != nil {
 		return replacedWorker, replacedShell, err
 	}
-	repo.ContainerID = worker.ID()
-	repo.ShellContainerID = shell.ID()
-	a.SetRepo(name, repo)
+	if err := a.Store.UpdateRepoContainerIDs(name, worker.ID(), shell.ID()); err != nil {
+		return replacedWorker, replacedShell, err
+	}
 	return replacedWorker, replacedShell, nil
 }
 

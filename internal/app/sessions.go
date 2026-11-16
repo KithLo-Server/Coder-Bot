@@ -235,8 +235,9 @@ func (a *App) CmdThink(ctx context.Context, update *telegram.Update, args []stri
 		_, err := a.replyMarkdown(ctx, update, usage)
 		return err
 	}
-	a.SetRepoSelection(repoName, modelID, variant)
-	a.Save()
+	if err := a.SetRepoSelection(repoName, modelID, variant); err != nil {
+		return err
+	}
 	if variant == nil {
 		_, err := a.replyMarkdown(ctx, update, "Thinking is now `off`; OpenCode uses the model's default variant.")
 		return err

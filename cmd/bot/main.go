@@ -46,11 +46,11 @@ func run() error {
 	}
 
 	logger := log.New(os.Stdout, "", log.LstdFlags)
-	st, err := state.Load(cfg.StateFile, cfg.Catalog)
+	st, err := state.Open(cfg.StateFile, cfg.Catalog)
 	if err != nil {
-		logger.Printf("Failed to load state: %v", err)
-		st = state.New()
+		return fmt.Errorf("open state database: %w", err)
 	}
+	defer st.Close()
 
 	var application *app.App
 	adapter, err := telegram.NewAdapter(cfg,

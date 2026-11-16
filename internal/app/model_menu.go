@@ -185,8 +185,9 @@ func parseModelCallback(data string) (string, string, int, bool) {
 
 func (a *App) finalizeModel(ctx context.Context, update *telegram.Update, pending *ModelPrompt, modelID string, variant *string) error {
 	repoName := pending.Repo
-	a.SetRepoSelection(repoName, modelID, variant)
-	a.Save()
+	if err := a.SetRepoSelection(repoName, modelID, variant); err != nil {
+		return err
+	}
 	a.PopModelPrompt(pending.ChatID)
 	label := a.Cfg.Catalog.Label(modelID)
 	text := fmt.Sprintf("Model for `%s` set to **%s** (`%s`)", repoName, label, modelID)

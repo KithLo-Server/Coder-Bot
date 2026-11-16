@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"log"
 	"sync"
 
@@ -55,10 +54,10 @@ type runEntry struct {
 	Cancelled   bool
 }
 
-// App holds configuration, state, adapters and all in-memory session data.
+// App holds configuration, the state store, adapters and all in-memory session data.
 type App struct {
 	Cfg      *config.Config
-	State    *state.State
+	Store    *state.Store
 	Telegram telegram.Messenger
 	Docker   docker.API
 	Locks    *locks.Manager
@@ -77,14 +76,14 @@ type App struct {
 	cancelGenerations     map[string]int
 }
 
-// New builds an app with empty in-memory state.
-func New(cfg *config.Config, st *state.State, messenger telegram.Messenger, dockerAPI docker.API, logger *log.Logger) *App {
+// New builds an app with empty in-memory session state.
+func New(cfg *config.Config, store *state.Store, messenger telegram.Messenger, dockerAPI docker.API, logger *log.Logger) *App {
 	if logger == nil {
 		logger = log.Default()
 	}
 	return &App{
 		Cfg:                   cfg,
-		State:                 st,
+		Store:                 store,
 		Telegram:              messenger,
 		Docker:                dockerAPI,
 		Locks:                 locks.NewManager(),
@@ -103,15 +102,6 @@ func New(cfg *config.Config, st *state.State, messenger telegram.Messenger, dock
 // BaseContainer returns the adapter used to run commands in the bot container.
 func (a *App) BaseContainer() docker.Container { return a.baseContainer }
 
-// Save persists the state, logging failures without interrupting the handler.
-func (a *App) Save() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if err := state.Save(a.Cfg.StateFile, a.State); err != nil {
-		a.Logger.Printf("Failed to save state: %v", err)
-	}
-}
-
 func token() string {
 	buffer := make([]byte, 4)
 	if _, err := rand.Read(buffer); err != nil {
@@ -120,109 +110,89 @@ func token() string {
 	return hex.EncodeToString(buffer)
 }
 
-// Repo returns a copy of a configured repository.
+// Repo returns a repository.
 func (a *App) Repo(name string) (*state.Repo, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	repo, ok := a.State.Repos.Get(name)
-	if !ok || repo == nil {
+	repo, ok, err := a.Store.Repo(name)
+	if err != nil {
+		a.Logger.Printf("Failed to read repository %s: %v", name, err)
 		return nil, false
 	}
-	return cloneRepo(repo), true
-}
-
-func cloneRepo(repo *state.Repo) *state.Repo {
-	if repo == nil {
-		return nil
-	}
-	copy := *repo
-	copy.Mounts = append([]string(nil), repo.Mounts...)
-	if repo.Variant != nil {
-		variant := *repo.Variant
-		copy.Variant = &variant
-	}
-	copy.Extra = make(map[string]json.RawMessage, len(repo.Extra))
-	for key, value := range repo.Extra {
-		copy.Extra[key] = append(json.RawMessage(nil), value...)
-	}
-	return &copy
+	return repo, ok
 }
 
 // RepoExists reports whether a repository is configured.
 func (a *App) RepoExists(name string) bool {
-	_, ok := a.Repo(name)
-	return ok
+	exists, err := a.Store.RepoExists(name)
+	if err != nil {
+		a.Logger.Printf("Failed to check repository %s: %v", name, err)
+		return false
+	}
+	return exists
 }
 
 // RepoKeys returns repository names in insertion order.
 func (a *App) RepoKeys() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.State.Repos.Keys()
+	names, err := a.Store.RepoKeys()
+	if err != nil {
+		a.Logger.Printf("Failed to list repositories: %v", err)
+		return nil
+	}
+	return names
 }
 
 // SetRepo stores a repository.
-func (a *App) SetRepo(name string, repo *state.Repo) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.State.Repos.Set(name, repo)
+func (a *App) SetRepo(name string, repo *state.Repo) error {
+	return a.Store.UpsertRepo(name, repo)
 }
 
 // DeleteRepo removes a repository.
-func (a *App) DeleteRepo(name string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.State.Repos.Delete(name)
+func (a *App) DeleteRepo(name string) error {
+	return a.Store.DeleteRepo(name)
 }
 
 // ActiveName returns a chat's persisted active repository name.
 func (a *App) ActiveName(chatID int64) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.State.ActiveContext[chatID]
+	name, err := a.Store.ActiveName(chatID)
+	if err != nil {
+		a.Logger.Printf("Failed to read active repository for chat %d: %v", chatID, err)
+		return ""
+	}
+	return name
 }
 
 // ActiveRepo returns the chat's active repository if it still exists.
 func (a *App) ActiveRepo(chatID int64) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	name := a.State.ActiveContext[chatID]
-	if _, ok := a.State.Repos.Get(name); ok {
-		return name
+	name, err := a.Store.ActiveRepo(chatID)
+	if err != nil {
+		a.Logger.Printf("Failed to read active repository for chat %d: %v", chatID, err)
+		return ""
 	}
-	return ""
+	return name
 }
 
 // SetActiveContext stores a chat's active repository.
-func (a *App) SetActiveContext(chatID int64, name string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.State.ActiveContext[chatID] = name
+func (a *App) SetActiveContext(chatID int64, name string) error {
+	return a.Store.SetActiveContext(chatID, name)
 }
 
-// ClearActiveContext removes the chat's active repository.
-func (a *App) ClearActiveContext(chatID int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.State.ActiveContext, chatID)
+// ClearActiveContext removes a chat's active repository.
+func (a *App) ClearActiveContext(chatID int64) error {
+	return a.Store.ClearActiveContext(chatID)
 }
 
 // ActiveContextCopy returns a snapshot of the per-chat active repositories.
 func (a *App) ActiveContextCopy() map[int64]string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	result := make(map[int64]string, len(a.State.ActiveContext))
-	for chatID, name := range a.State.ActiveContext {
-		result[chatID] = name
+	result, err := a.Store.ActiveContexts()
+	if err != nil {
+		a.Logger.Printf("Failed to read active contexts: %v", err)
+		return map[int64]string{}
 	}
 	return result
 }
 
 // ModelForRepo returns the repository's valid model or the global default.
 func (a *App) ModelForRepo(name string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	repo, ok := a.State.Repos.Get(name)
+	repo, ok := a.Repo(name)
 	if ok && repo.Model != "" && a.Cfg.Catalog.Entry(repo.Model) != nil {
 		return repo.Model
 	}
@@ -231,9 +201,7 @@ func (a *App) ModelForRepo(name string) string {
 
 // VariantForRepo returns the repository's valid variant, if any.
 func (a *App) VariantForRepo(name string) *string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	repo, ok := a.State.Repos.Get(name)
+	repo, ok := a.Repo(name)
 	if !ok {
 		return a.Cfg.Catalog.DefaultVariant
 	}
@@ -262,17 +230,8 @@ func (a *App) VariantForRepo(name string) *string {
 }
 
 // SetRepoSelection stores a validated model/variant selection.
-func (a *App) SetRepoSelection(name, modelID string, variant *string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	repo, ok := a.State.Repos.Get(name)
-	if !ok {
-		repo = &state.Repo{}
-		a.State.Repos.Set(name, repo)
-	}
-	repo.Model = modelID
-	repo.Variant = variant
-	repo.VariantSet = true
+func (a *App) SetRepoSelection(name, modelID string, variant *string) error {
+	return a.Store.SetRepoSelection(name, modelID, variant)
 }
 
 // ResolveVariantChoice resolves a 1-based index, variant text, or "off".
@@ -560,74 +519,57 @@ func (a *App) DropPendingPlan(chatID int64) {
 
 // CommandSet returns a chat's saved command set.
 func (a *App) CommandSet(chatID int64, name string) (*state.CommandSet, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	sets, ok := a.State.CommandSets[chatID]
-	if !ok {
+	set, ok, err := a.Store.CommandSet(chatID, name)
+	if err != nil {
+		a.Logger.Printf("Failed to read command set %s: %v", name, err)
 		return nil, false
 	}
-	return sets.Get(name)
+	return set, ok
 }
 
 // CommandSetNames returns a chat's saved command set names in insertion order.
 func (a *App) CommandSetNames(chatID int64) []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	sets, ok := a.State.CommandSets[chatID]
-	if !ok {
+	names, err := a.Store.CommandSetNames(chatID)
+	if err != nil {
+		a.Logger.Printf("Failed to list command sets for chat %d: %v", chatID, err)
 		return nil
 	}
-	return sets.Keys()
+	return names
 }
 
 // SaveCommandSet stores a command set for a chat.
-func (a *App) SaveCommandSet(chatID int64, set *state.CommandSet) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.State.ChatSets(chatID).Set(set.Name, set)
+func (a *App) SaveCommandSet(chatID int64, set *state.CommandSet) error {
+	return a.Store.SaveCommandSet(chatID, set)
 }
 
 // DeleteCommandSet removes a command set from a chat.
 func (a *App) DeleteCommandSet(chatID int64, name string) (*state.CommandSet, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	sets, ok := a.State.CommandSets[chatID]
-	if !ok {
+	set, ok, err := a.Store.DeleteCommandSet(chatID, name)
+	if err != nil {
+		a.Logger.Printf("Failed to delete command set %s: %v", name, err)
 		return nil, false
 	}
-	set, ok := sets.Get(name)
-	if !ok {
-		return nil, false
-	}
-	sets.Delete(name)
-	return set, true
+	return set, ok
 }
 
 // CommandSetsCount returns how many sets a chat has.
 func (a *App) CommandSetsCount(chatID int64) int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	sets, ok := a.State.CommandSets[chatID]
-	if !ok {
+	count, err := a.Store.CommandSetsCount(chatID)
+	if err != nil {
+		a.Logger.Printf("Failed to count command sets for chat %d: %v", chatID, err)
 		return 0
 	}
-	return sets.Len()
+	return count
 }
 
 // CopyCommandSets returns a snapshot of a chat's sets.
 func (a *App) CopyCommandSets(chatID int64) map[string]*state.CommandSet {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	result := make(map[string]*state.CommandSet)
-	sets, ok := a.State.CommandSets[chatID]
-	if !ok {
-		return result
+	sets, err := a.Store.CommandSets(chatID)
+	if err != nil {
+		a.Logger.Printf("Failed to read command sets for chat %d: %v", chatID, err)
+		return map[string]*state.CommandSet{}
 	}
-	sets.Range(func(name string, set *state.CommandSet) bool {
-		result[name] = &state.CommandSet{Name: set.Name, Commands: append([]string(nil), set.Commands...)}
-		return true
-	})
-	return result
+	return sets
 }
 
 // Generation returns the current cancel generation of a repository.

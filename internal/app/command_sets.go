@@ -347,7 +347,6 @@ func (a *App) HandleCommandCallback(ctx context.Context, update *telegram.Update
 		if !ok {
 			return a.editCallbackMessage(ctx, update, "That command set no longer exists.", false)
 		}
-		a.Save()
 		if pending := a.GetPendingCommand(chatID); pending != nil && pending.Name == name {
 			a.DeletePendingCommand(chatID)
 		}
@@ -374,8 +373,9 @@ func (a *App) HandleCommandCallback(ctx context.Context, update *telegram.Update
 			return a.editCallbackMessage(ctx, update, fmt.Sprintf("Cannot save `%s`: line %d (`%s`) is not a supported bot command. Replace it and press **Done** again.", name, index+1, invalid), true)
 		}
 		a.DeletePendingCommand(chatID)
-		a.SaveCommandSet(chatID, &state.CommandSet{Name: name, Commands: commands})
-		a.Save()
+		if err := a.SaveCommandSet(chatID, &state.CommandSet{Name: name, Commands: commands}); err != nil {
+			return err
+		}
 		lines := []string{fmt.Sprintf("**Saved command set** `%s` in this chat (%d command(s)):\n", name, len(commands))}
 		for index, command := range commands {
 			lines = append(lines, fmt.Sprintf("%d. `%s`", index+1, command))

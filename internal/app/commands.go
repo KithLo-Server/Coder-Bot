@@ -86,7 +86,7 @@ func (a *App) resetRepoSessions(ctx context.Context, name string) {
 	}
 }
 
-func (a *App) removeRepoFromMounts(name string) {
+func (a *App) removeRepoFromMounts(name string) error {
 	for _, repoName := range a.RepoKeys() {
 		repo, ok := a.Repo(repoName)
 		if !ok || len(repo.Mounts) == 0 {
@@ -103,21 +103,20 @@ func (a *App) removeRepoFromMounts(name string) {
 		}
 		if changed {
 			repo.Mounts = mounts
-			a.SetRepo(repoName, repo)
+			if err := a.SetRepo(repoName, repo); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func (a *App) forgetRepo(ctx context.Context, name string) {
+func (a *App) forgetRepo(ctx context.Context, name string) error {
 	a.resetRepoSessions(ctx, name)
-	a.removeRepoFromMounts(name)
-	a.DeleteRepo(name)
-	for chatID, activeName := range a.ActiveContextCopy() {
-		if activeName == name {
-			a.ClearActiveContext(chatID)
-		}
+	if err := a.removeRepoFromMounts(name); err != nil {
+		return err
 	}
-	a.Save()
+	return a.DeleteRepo(name)
 }
 
 func (a *App) repoVolumes(name string) []docker.Volume {
@@ -211,7 +210,9 @@ func (a *App) recreateRepoContainers(ctx context.Context, name string) (docker.C
 	}
 	repo.ContainerID = worker.ID()
 	repo.ShellContainerID = shell.ID()
-	a.SetRepo(name, repo)
+	if err := a.SetRepo(name, repo); err != nil {
+		return nil, err
+	}
 	return worker, nil
 }
 
@@ -312,7 +313,10 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 	existing.URL = remoteURL
 	existing.ContainerID = ""
 	existing.ShellContainerID = ""
-	a.SetRepo(name, existing)
+	if err := a.SetRepo(name, existing); err != nil {
+		a.editStatus(ctx, status, fmt.Sprintf("Could not save repository `%s`: `%v`", name, err))
+		return false, false
+	}
 	return true, workspace == "git"
 }
 
@@ -352,8 +356,9 @@ func (a *App) CmdCreate(ctx context.Context, update *telegram.Update, args []str
 		return nil
 	}
 	a.RemovePendingPlanButton(lockCtx, chatID)
-	a.SetActiveContext(chatID, name)
-	a.Save()
+	if err := a.SetActiveContext(chatID, name); err != nil {
+		return err
+	}
 	state := "initialized"
 	if hadClone {
 		state = "updated"
@@ -380,8 +385,9 @@ func (a *App) CmdSet(ctx context.Context, update *telegram.Update, args []string
 	if a.ActiveName(chatID) != name {
 		a.RemovePendingPlanButton(ctx, chatID)
 	}
-	a.SetActiveContext(chatID, name)
-	a.Save()
+	if err := a.SetActiveContext(chatID, name); err != nil {
+		return err
+	}
 	_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Active context set to `%s`.", name))
 	return err
 }
@@ -535,7 +541,9 @@ func (a *App) changeMount(ctx context.Context, update *telegram.Update, mount st
 		return err
 	}
 	repo.Mounts = newMounts
-	a.SetRepo(active, repo)
+	if err := a.SetRepo(active, repo); err != nil {
+		return err
+	}
 	if _, err := a.recreateRepoContainers(lockCtx, active); err != nil {
 		action := "unmounting"
 		if adding {
@@ -543,12 +551,13 @@ func (a *App) changeMount(ctx context.Context, update *telegram.Update, mount st
 		}
 		a.Logger.Printf("Error %s %s: %v", action, mount, err)
 		repo.Mounts = oldMounts
-		a.SetRepo(active, repo)
+		if rollbackErr := a.SetRepo(active, repo); rollbackErr != nil {
+			a.Logger.Printf("Failed to roll back mounts for %s: %v", active, rollbackErr)
+		}
 		a.editStatus(lockCtx, status, fmt.Sprintf("Failed to %s `%s`: `%v`", map[bool]string{true: "mount", false: "unmount"}[adding], mount, err))
 		return nil
 	}
 	a.resetRepoSessions(lockCtx, active)
-	a.Save()
 	if adding {
 		a.editStatus(lockCtx, status, fmt.Sprintf("Mounted `%s` at `%s/%s` in `%s`.", mount, config.MountDir, mount, active))
 	} else {
@@ -610,11 +619,10 @@ func (a *App) CmdStop(ctx context.Context, update *telegram.Update, args []strin
 		return nil
 	}
 	a.removeRepoContainers(lockCtx, name, repo)
-	repo.ContainerID = ""
-	repo.ShellContainerID = ""
-	a.SetRepo(name, repo)
+	if err := a.Store.UpdateRepoContainerIDs(name, "", ""); err != nil {
+		return err
+	}
 	a.resetRepoSessions(lockCtx, name)
-	a.Save()
 	a.editStatus(lockCtx, status, fmt.Sprintf("Stopped `%s`: containers removed, repository state kept.", name))
 	return nil
 }
@@ -712,7 +720,10 @@ func (a *App) CmdPurge(ctx context.Context, update *telegram.Update, args []stri
 			return nil
 		}
 	}
-	a.forgetRepo(lockCtx, name)
+	if err := a.forgetRepo(lockCtx, name); err != nil {
+		a.editStatus(lockCtx, status, fmt.Sprintf("Could not remove state for `%s`: `%v`", name, err))
+		return nil
+	}
 	switch {
 	case !hadRepo:
 		a.editStatus(lockCtx, status, fmt.Sprintf("Checkout `%s` was purged from disk.", name))
@@ -768,8 +779,9 @@ func (a *App) CmdReload(ctx context.Context, update *telegram.Update, args []str
 	}
 	chatID, _ := messageTarget(update)
 	a.RemovePendingPlanButton(lockCtx, chatID)
-	a.SetActiveContext(chatID, name)
-	a.Save()
+	if err := a.SetActiveContext(chatID, name); err != nil {
+		return err
+	}
 	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` reloaded and set as active context!\nModel configured: `%s`", name, a.ModelForRepo(name)))
 	return nil
 }
@@ -808,7 +820,6 @@ func (a *App) CmdReloadAll(ctx context.Context, update *telegram.Update, args []
 			skipped = append(skipped, name)
 		case ok:
 			reloaded = append(reloaded, name)
-			a.Save()
 		default:
 			failed = append(failed, name)
 		}

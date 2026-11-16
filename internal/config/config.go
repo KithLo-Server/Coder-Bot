@@ -154,7 +154,7 @@ func LoadFromEnv(getenv func(string) string) (*Config, error) {
 		GitUserName:       getenv("GIT_USER_NAME"),
 		GitUserEmail:      getenv("GIT_USER_EMAIL"),
 		DataDir:           dataDir,
-		StateFile:         dataDir + "/repos_state.json",
+		StateFile:         dataDir + "/repos_state.db",
 		ReadTimeout:       seconds(getenv, "TELEGRAM_READ_TIMEOUT", 60),
 		WriteTimeout:      seconds(getenv, "TELEGRAM_WRITE_TIMEOUT", 300),
 		ConnectTimeout:    seconds(getenv, "TELEGRAM_CONNECT_TIMEOUT", 30),

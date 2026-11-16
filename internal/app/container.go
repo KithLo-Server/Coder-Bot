@@ -79,8 +79,9 @@ func (a *App) GetRepoContainer(ctx context.Context, name string) (docker.Contain
 		}
 	}
 	if repo.ContainerID != container.ID() {
-		repo.ContainerID = container.ID()
-		a.SetRepo(name, repo)
+		if err := a.Store.UpdateRepoContainerIDs(name, container.ID(), repo.ShellContainerID); err != nil {
+			return nil, err
+		}
 	}
 	return container, nil
 }
@@ -102,8 +103,9 @@ func (a *App) GetShellContainer(ctx context.Context, name string) (docker.Contai
 		}
 	}
 	if repo.ShellContainerID != container.ID() {
-		repo.ShellContainerID = container.ID()
-		a.SetRepo(name, repo)
+		if err := a.Store.UpdateRepoContainerIDs(name, repo.ContainerID, container.ID()); err != nil {
+			return nil, err
+		}
 	}
 	return container, nil
 }

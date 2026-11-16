@@ -344,16 +344,22 @@ func newTestEnv(t *testing.T) *testEnv {
 	tg := newFakeMessenger()
 	fake := newFakeDocker()
 	baseContainer := fake.add(&fakeContainer{id: "base", name: "base", status: "running", archives: make(map[string][]byte)})
+	dataDir := t.TempDir()
 	cfg := &config.Config{
 		DeepseekAPIKey: "key",
 		ReposDir:       "/repos",
 		UploadsDir:     "/upload",
-		DataDir:        t.TempDir(),
-		StateFile:      filepath.Join(t.TempDir(), "state.json"),
+		DataDir:        dataDir,
+		StateFile:      filepath.Join(dataDir, "state.db"),
 		AllowedUserIDs: map[string]bool{},
 		Catalog:        testCatalog(t),
 	}
-	application := New(cfg, state.New(), tg, fake, log.New(io.Discard, "", 0))
+	store, err := state.Open(cfg.StateFile, cfg.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	application := New(cfg, store, tg, fake, log.New(io.Discard, "", 0))
 	application.baseContainer = baseContainer
 	return &testEnv{app: application, tg: tg, docker: fake, base: baseContainer, ctx: context.Background()}
 }
