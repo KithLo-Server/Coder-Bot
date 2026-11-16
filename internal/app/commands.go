@@ -597,13 +597,13 @@ func (a *App) CmdUnmount(ctx context.Context, update *telegram.Update, args []st
 	return a.changeMount(ctx, update, strings.TrimSpace(args[0]), false)
 }
 
-// CmdDelete implements /delete.
-func (a *App) CmdDelete(ctx context.Context, update *telegram.Update, args []string) error {
+// CmdStop implements /stop.
+func (a *App) CmdStop(ctx context.Context, update *telegram.Update, args []string) error {
 	if !a.Authorized(update) {
 		return nil
 	}
 	if len(args) == 0 {
-		_, err := a.replyMarkdown(ctx, update, "Usage: `/delete {name}`")
+		_, err := a.replyMarkdown(ctx, update, "Usage: `/stop {name}`")
 		return err
 	}
 	name := strings.TrimSpace(args[0])
@@ -611,7 +611,7 @@ func (a *App) CmdDelete(ctx context.Context, update *telegram.Update, args []str
 		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Repo `%s` does not exist.", name))
 		return err
 	}
-	status, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Deleting `%s`...", name))
+	status, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Stopping `%s`...", name))
 	if err != nil {
 		return err
 	}
@@ -626,8 +626,12 @@ func (a *App) CmdDelete(ctx context.Context, update *telegram.Update, args []str
 		return nil
 	}
 	a.removeRepoContainers(lockCtx, name, repo)
-	a.forgetRepo(lockCtx, name)
-	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` and its containers have been removed.", name))
+	repo.ContainerID = ""
+	repo.ShellContainerID = ""
+	a.SetRepo(name, repo)
+	a.resetRepoSessions(lockCtx, name)
+	a.Save()
+	a.editStatus(lockCtx, status, fmt.Sprintf("Stopped `%s`: containers removed, repository state kept.", name))
 	return nil
 }
 

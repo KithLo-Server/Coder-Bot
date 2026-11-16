@@ -29,7 +29,7 @@ func init() {
 		"list":      (*App).CmdList,
 		"mount":     (*App).CmdMount,
 		"unmount":   (*App).CmdUnmount,
-		"delete":    (*App).CmdDelete,
+		"stop":      (*App).CmdStop,
 		"purge":     (*App).CmdPurge,
 		"reload":    (*App).CmdReload,
 		"reloadall": (*App).CmdReloadAll,

@@ -4,7 +4,7 @@ A Go Telegram bot that runs the [OpenCode](https://opencode.ai) CLI inside per-r
 
 ## Features
 
-- **Repository management** — create, select, inspect, reload, and delete repositories from Telegram.
+- **Repository management** — create, select, inspect, reload, and stop repositories from Telegram.
 - **OpenCode sessions** — plan mode (`/ask`, plain text) and build mode (`/code`, `#`), with conversation continuity per chat and repository.
 - **Execute Plan & Commit** — plan responses carry a button that re-runs OpenCode in build mode on the same session with an instruction to commit the result.
 - **Model selection** — interactive `/model` picker and `/think` variant selection, driven by an `OPENCODE_MODELS` catalog.
@@ -159,8 +159,8 @@ The worker and shell images are fixed:
 | `/list` | List configured repositories and mark the active one. |
 | `/mount <name>` | Mount another configured repository's checkout at `/opt/<name>` in the active repository's worker and shell. |
 | `/unmount <name>` | Remove a repository previously mounted with `/mount` from the active worker and shell. |
-| `/delete <name>` | Remove the repository's worker and shell containers and bot state, leaving its checkout on disk. |
-| `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously deleted repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). |
+| `/stop <name>` | Stop and remove the repository's worker and shell containers and reset its OpenCode sessions, keeping its bot state and checkout on disk. |
+| `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously stopped or purged repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). |
 | `/reload <name>` | Recreate the worker and shell, refresh the checkout with a fast-forward pull in the base, and reset its OpenCode sessions. |
 | `/reloadall` | Recreate the containers and refresh the checkout of every repository, resetting their OpenCode sessions. |
 | `/upgrade` | Pull the latest worker and shell images, replace containers still running older images (resetting their OpenCode sessions), then prune unused old images. |

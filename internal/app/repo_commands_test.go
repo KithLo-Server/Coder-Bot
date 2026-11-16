@@ -234,15 +234,19 @@ func TestReloadAllSummarizes(t *testing.T) {
 	}
 }
 
-func TestDeleteRemovesContainerAndState(t *testing.T) {
+func TestStopRemovesContainersAndKeepsState(t *testing.T) {
 	env := newTestEnv(t)
 	worker := env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
-	if err := env.app.CmdDelete(env.ctx, env.message("/delete repo", 1), []string{"repo"}); err != nil {
+	if err := env.app.CmdStop(env.ctx, env.message("/stop repo", 1), []string{"repo"}); err != nil {
 		t.Fatal(err)
 	}
-	if worker.removed == 0 || env.app.RepoExists("repo") || env.app.ActiveRepo(1) != "" {
-		t.Fatalf("delete incomplete: removed=%d repo=%v active=%q", worker.removed, env.app.RepoExists("repo"), env.app.ActiveRepo(1))
+	if worker.removed == 0 || !env.app.RepoExists("repo") || env.app.ActiveRepo(1) != "repo" {
+		t.Fatalf("stop incomplete: removed=%d repo=%v active=%q", worker.removed, env.app.RepoExists("repo"), env.app.ActiveRepo(1))
+	}
+	repo, _ := env.app.Repo("repo")
+	if repo.ContainerID != "" || repo.ShellContainerID != "" {
+		t.Fatalf("container ids = %q/%q", repo.ContainerID, repo.ShellContainerID)
 	}
 }
 
