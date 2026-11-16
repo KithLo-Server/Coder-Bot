@@ -50,8 +50,8 @@ func TestUpgradeReplacesOnlyChangedContainers(t *testing.T) {
 	if repo.ShellContainerID != oldShell.id {
 		t.Fatal("expected the shell container id to stay the same")
 	}
-	if got := env.app.Session(1, "repo"); got != "" {
-		t.Fatalf("expected sessions to be reset, got %q", got)
+	if got := env.app.Session(1, "repo"); got != "session-1" {
+		t.Fatalf("expected session to be retained, got %q", got)
 	}
 	if len(env.docker.runCalls) != 1 {
 		t.Fatalf("expected one replacement container, got %d", len(env.docker.runCalls))

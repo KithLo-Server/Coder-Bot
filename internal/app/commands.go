@@ -77,13 +77,20 @@ func (a *App) removeRepoContainers(ctx context.Context, name string, repo *state
 	}
 }
 
-func (a *App) resetRepoSessions(ctx context.Context, name string) {
-	a.ForgetSessionsForRepo(name)
+func (a *App) clearRepoPendingPlans(ctx context.Context, name string) {
 	for chatID, activeName := range a.ActiveContextCopy() {
 		if activeName == name {
 			a.RemovePendingPlanButton(ctx, chatID)
 		}
 	}
+}
+
+func (a *App) resetRepoSessions(ctx context.Context, name string) error {
+	if err := a.ForgetSessionsForRepo(name); err != nil {
+		return err
+	}
+	a.clearRepoPendingPlans(ctx, name)
+	return nil
 }
 
 func (a *App) removeRepoFromMounts(name string) error {
@@ -112,11 +119,16 @@ func (a *App) removeRepoFromMounts(name string) error {
 }
 
 func (a *App) forgetRepo(ctx context.Context, name string) error {
-	a.resetRepoSessions(ctx, name)
+	if err := a.resetRepoSessions(ctx, name); err != nil {
+		return err
+	}
 	if err := a.removeRepoFromMounts(name); err != nil {
 		return err
 	}
-	return a.DeleteRepo(name)
+	if err := a.DeleteRepo(name); err != nil {
+		return err
+	}
+	return a.removeOpencodeData(name)
 }
 
 func (a *App) repoVolumes(name string) []docker.Volume {
@@ -147,11 +159,17 @@ func (a *App) repoVolumes(name string) []docker.Volume {
 }
 
 func (a *App) createWorkerContainer(ctx context.Context, name string) (docker.Container, error) {
+	volumes, err := a.workerVolumes(name)
+	if err != nil {
+		return nil, err
+	}
+	environment := a.WorkerEnvironment()
+	environment["OPENCODE_DB"] = config.OpenCodeDBPath
 	return a.Docker.RunContainer(ctx, docker.RunOptions{
 		Image:         config.WorkerImage,
 		Name:          workerContainerName(name),
-		Environment:   a.WorkerEnvironment(),
-		Volumes:       a.repoVolumes(name),
+		Environment:   environment,
+		Volumes:       volumes,
 		WorkingDir:    config.WorkspaceDir,
 		RestartPolicy: "unless-stopped",
 	})
@@ -557,7 +575,7 @@ func (a *App) changeMount(ctx context.Context, update *telegram.Update, mount st
 		a.editStatus(lockCtx, status, fmt.Sprintf("Failed to %s `%s`: `%v`", map[bool]string{true: "mount", false: "unmount"}[adding], mount, err))
 		return nil
 	}
-	a.resetRepoSessions(lockCtx, active)
+	a.clearRepoPendingPlans(lockCtx, active)
 	if adding {
 		a.editStatus(lockCtx, status, fmt.Sprintf("Mounted `%s` at `%s/%s` in `%s`.", mount, config.MountDir, mount, active))
 	} else {
@@ -622,7 +640,7 @@ func (a *App) CmdStop(ctx context.Context, update *telegram.Update, args []strin
 	if err := a.Store.UpdateRepoContainerIDs(name, "", ""); err != nil {
 		return err
 	}
-	a.resetRepoSessions(lockCtx, name)
+	a.clearRepoPendingPlans(lockCtx, name)
 	a.editStatus(lockCtx, status, fmt.Sprintf("Stopped `%s`: containers removed, repository state kept.", name))
 	return nil
 }
@@ -741,7 +759,7 @@ func (a *App) reloadRepo(ctx context.Context, status *telegram.Message, name str
 		return false, false
 	}
 	a.removeRepoContainers(ctx, name, repo)
-	a.resetRepoSessions(ctx, name)
+	a.clearRepoPendingPlans(ctx, name)
 	ok, _ = a.setupRepo(ctx, status, name, repo.URL)
 	return ok, true
 }

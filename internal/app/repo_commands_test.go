@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"opencodebot/internal/config"
 	"opencodebot/internal/docker"
 	"opencodebot/internal/state"
 	"opencodebot/internal/telegram"
@@ -125,6 +126,7 @@ func TestMountAndUnmountRecreateWorker(t *testing.T) {
 	env.addRepo("repo")
 	env.addRepo("other")
 	env.app.SetActiveContext(1, "repo")
+	env.app.SetSession(1, "repo", "session-1")
 	if err := env.app.CmdMount(env.ctx, env.message("/mount other", 1), []string{"other"}); err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +154,9 @@ func TestMountAndUnmountRecreateWorker(t *testing.T) {
 	if len(repo.Mounts) != 0 {
 		t.Fatalf("mounts = %+v", repo.Mounts)
 	}
+	if got := env.app.Session(1, "repo"); got != "session-1" {
+		t.Fatalf("session = %q", got)
+	}
 
 	env.docker.runErr = errors.New("boom")
 	env.app.CmdMount(env.ctx, env.message("/mount other", 1), []string{"other"})
@@ -164,6 +169,7 @@ func TestMountAndUnmountRecreateWorker(t *testing.T) {
 func TestReloadStopsContainersAndSyncs(t *testing.T) {
 	env := newTestEnv(t)
 	worker := env.addRepo("repo")
+	env.app.SetSession(1, "repo", "session-1")
 	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("git\n")}, nil
@@ -192,12 +198,17 @@ func TestReloadStopsContainersAndSyncs(t *testing.T) {
 	if env.app.ActiveRepo(1) != "repo" {
 		t.Fatal("reload should set active")
 	}
+	if got := env.app.Session(1, "repo"); got != "session-1" {
+		t.Fatalf("session = %q", got)
+	}
 }
 
 func TestReloadAllSummarizes(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("one")
 	env.addRepo("two")
+	env.app.SetSession(1, "one", "session-one")
+	env.app.SetSession(1, "two", "session-two")
 	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("git\n")}, nil
@@ -221,12 +232,16 @@ func TestReloadAllSummarizes(t *testing.T) {
 	if !strings.Contains(last, "Reloaded 2/2") {
 		t.Fatalf("summary = %q", last)
 	}
+	if env.app.Session(1, "one") != "session-one" || env.app.Session(1, "two") != "session-two" {
+		t.Fatalf("sessions = %q/%q", env.app.Session(1, "one"), env.app.Session(1, "two"))
+	}
 }
 
 func TestStopRemovesContainersAndKeepsState(t *testing.T) {
 	env := newTestEnv(t)
 	worker := env.addRepo("repo")
 	env.app.SetActiveContext(1, "repo")
+	env.app.SetSession(1, "repo", "session-1")
 	if err := env.app.CmdStop(env.ctx, env.message("/stop repo", 1), []string{"repo"}); err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +251,9 @@ func TestStopRemovesContainersAndKeepsState(t *testing.T) {
 	repo, _ := env.app.Repo("repo")
 	if repo.ContainerID != "" || repo.ShellContainerID != "" {
 		t.Fatalf("container ids = %q/%q", repo.ContainerID, repo.ShellContainerID)
+	}
+	if got := env.app.Session(1, "repo"); got != "session-1" {
+		t.Fatalf("session = %q", got)
 	}
 }
 
@@ -422,6 +440,13 @@ func TestCreateUpdatesExistingMatchingClone(t *testing.T) {
 func TestPurgeMissingCheckoutRemovesState(t *testing.T) {
 	env := newTestEnv(t)
 	env.addRepo("repo")
+	dataPath, err := env.app.prepareOpencodeData("repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataPath+"/opencode.db", []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
 		if inspectScript(options) {
 			return docker.ExecResult{Output: []byte("missing\n")}, nil
@@ -434,6 +459,9 @@ func TestPurgeMissingCheckoutRemovesState(t *testing.T) {
 	}
 	if !strings.Contains(env.tg.edits[len(env.tg.edits)-1].Text, "no checkout left") {
 		t.Fatalf("edits = %+v", env.tg.edits)
+	}
+	if _, err := os.Stat(dataPath); !os.IsNotExist(err) {
+		t.Fatalf("opencode data directory still exists: %v", err)
 	}
 }
 
@@ -476,5 +504,18 @@ func TestGetContainersCreatesMissingOnDemand(t *testing.T) {
 	}
 	if len(env.docker.runCalls) != 2 {
 		t.Fatalf("run calls = %d", len(env.docker.runCalls))
+	}
+	workerRun := env.docker.runCalls[0]
+	if workerRun.Environment["OPENCODE_DB"] != config.OpenCodeDBPath {
+		t.Fatalf("opencode db env = %q", workerRun.Environment["OPENCODE_DB"])
+	}
+	foundVolume := false
+	for _, volume := range workerRun.Volumes {
+		if volume.Source == env.app.opencodeDataPath("repo") && volume.Target == config.OpenCodeDataDir {
+			foundVolume = true
+		}
+	}
+	if !foundVolume {
+		t.Fatalf("worker volumes = %+v", workerRun.Volumes)
 	}
 }

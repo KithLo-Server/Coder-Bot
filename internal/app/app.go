@@ -67,7 +67,6 @@ type App struct {
 
 	mu sync.Mutex
 
-	sessions              map[int64]map[string]string
 	modelPrompts          map[int64]*ModelPrompt
 	pendingCommandEntries map[int64]*PendingCommand
 	commandSetButtons     map[int64]map[int]bool
@@ -89,7 +88,6 @@ func New(cfg *config.Config, store *state.Store, messenger telegram.Messenger, d
 		Locks:                 locks.NewManager(),
 		Logger:                logger,
 		baseContainer:         base.New(),
-		sessions:              make(map[int64]map[string]string),
 		modelPrompts:          make(map[int64]*ModelPrompt),
 		pendingCommandEntries: make(map[int64]*PendingCommand),
 		commandSetButtons:     make(map[int64]map[int]bool),
@@ -307,55 +305,42 @@ func (a *App) NewPlanToken() string { return token() }
 
 // Session returns a chat's OpenCode session for one repository.
 func (a *App) Session(chatID int64, name string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.sessions[chatID][name]
+	sessionID, err := a.Store.Session(chatID, name)
+	if err != nil {
+		a.Logger.Printf("Failed to read session for chat %d in %s: %v", chatID, name, err)
+		return ""
+	}
+	return sessionID
 }
 
 // SetSession stores an OpenCode session id.
-func (a *App) SetSession(chatID int64, name, sessionID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.sessions[chatID] == nil {
-		a.sessions[chatID] = make(map[string]string)
-	}
-	a.sessions[chatID][name] = sessionID
+func (a *App) SetSession(chatID int64, name, sessionID string) error {
+	return a.Store.SetSession(chatID, name, sessionID)
 }
 
 // ForgetSession drops a chat's session for one repository.
-func (a *App) ForgetSession(chatID int64, name string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.sessions[chatID], name)
-	if len(a.sessions[chatID]) == 0 {
-		delete(a.sessions, chatID)
-	}
+func (a *App) ForgetSession(chatID int64, name string) error {
+	return a.Store.ForgetSession(chatID, name)
 }
 
 // ForgetSessionsForRepo drops a repository's sessions for every chat.
-func (a *App) ForgetSessionsForRepo(name string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for chatID, sessions := range a.sessions {
-		delete(sessions, name)
-		if len(sessions) == 0 {
-			delete(a.sessions, chatID)
-		}
-	}
+func (a *App) ForgetSessionsForRepo(name string) error {
+	return a.Store.ForgetRepoSessions(name)
 }
 
 // ChatHasSessions reports whether a chat has any stored sessions.
 func (a *App) ChatHasSessions(chatID int64) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return len(a.sessions[chatID]) > 0
+	hasSessions, err := a.Store.ChatHasSessions(chatID)
+	if err != nil {
+		a.Logger.Printf("Failed to read sessions for chat %d: %v", chatID, err)
+		return false
+	}
+	return hasSessions
 }
 
 // ForgetChatSessions drops every stored session of a chat.
-func (a *App) ForgetChatSessions(chatID int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.sessions, chatID)
+func (a *App) ForgetChatSessions(chatID int64) error {
+	return a.Store.ForgetChatSessions(chatID)
 }
 
 // GetModelPrompt returns a copy of an in-progress /model prompt.

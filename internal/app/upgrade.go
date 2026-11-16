@@ -57,7 +57,7 @@ func (a *App) CmdUpgrade(ctx context.Context, update *telegram.Update, args []st
 			continue
 		}
 		if replacedWorker || replacedShell {
-			a.resetRepoSessions(lockCtx, name)
+			a.clearRepoPendingPlans(lockCtx, name)
 		}
 		if replacedWorker {
 			workerReplaced++

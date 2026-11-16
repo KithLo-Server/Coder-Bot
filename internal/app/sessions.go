@@ -108,16 +108,22 @@ func (a *App) RunOpencodeTaskOnMessage(ctx context.Context, chatID int64, messag
 	cleanOutput := opencode.Response(rawOutput)
 	failed := opencode.FailedWithoutText(rawOutput)
 	if failed {
-		a.ForgetSession(chatID, name)
+		if err := a.ForgetSession(chatID, name); err != nil {
+			a.Logger.Printf("Failed to clear session for chat %d in %s: %v", chatID, name, err)
+		}
 		cleanOutput = fmt.Sprintf("%s\n\nOpenCode failed after %d attempt(s). The session was reset; try the prompt again.", cleanOutput, attempt)
 		a.Logger.Printf("OpenCode run for chat %d in repo %s failed after %d attempt(s)", chatID, name, attempt)
 	} else {
 		newSessionID := opencode.SessionID(rawOutput)
 		if newSessionID != "" {
-			a.SetSession(chatID, name, newSessionID)
+			if err := a.SetSession(chatID, name, newSessionID); err != nil {
+				a.Logger.Printf("Failed to store session for chat %d in %s: %v", chatID, name, err)
+			}
 		} else {
 			if sessionID != "" {
-				a.ForgetSession(chatID, name)
+				if err := a.ForgetSession(chatID, name); err != nil {
+					a.Logger.Printf("Failed to clear session for chat %d in %s: %v", chatID, name, err)
+				}
 			}
 			a.Logger.Printf("OpenCode run for chat %d in repo %s returned no session id", chatID, name)
 		}
@@ -267,13 +273,18 @@ func (a *App) CmdClear(ctx context.Context, update *telegram.Update, args []stri
 		}
 		a.RemovePendingPlanButton(lockCtx, chatID)
 		sessionReset = a.Session(chatID, name) != ""
-		a.ForgetSession(chatID, name)
+		forgetErr := a.ForgetSession(chatID, name)
 		release()
+		if forgetErr != nil {
+			return forgetErr
+		}
 		repoLabel = fmt.Sprintf("`%s`", name)
 	} else {
 		a.RemovePendingPlanButton(ctx, chatID)
 		sessionReset = a.ChatHasSessions(chatID)
-		a.ForgetChatSessions(chatID)
+		if err := a.ForgetChatSessions(chatID); err != nil {
+			return err
+		}
 		repoLabel = "this chat"
 	}
 	var message string

@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Repo is one configured repository.
 type Repo struct {
@@ -96,6 +96,12 @@ func (s *Store) initSchema() error {
 			chat_id INTEGER PRIMARY KEY,
 			repo_name TEXT NOT NULL REFERENCES repos(name) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			chat_id INTEGER NOT NULL,
+			repo_name TEXT NOT NULL REFERENCES repos(name) ON DELETE CASCADE,
+			session_id TEXT NOT NULL,
+			PRIMARY KEY (chat_id, repo_name)
+		)`,
 		`CREATE TABLE IF NOT EXISTS command_sets (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			chat_id INTEGER NOT NULL,
@@ -123,12 +129,14 @@ func (s *Store) initSchema() error {
 		return err
 	}
 	switch {
-	case version == 0:
+	case version > schemaVersion:
+		return fmt.Errorf("unsupported state database version %d", version)
+	case version < schemaVersion:
+		// Schema changes so far are additive and handled by the idempotent
+		// CREATE TABLE statements above.
 		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 			return err
 		}
-	case version != schemaVersion:
-		return fmt.Errorf("unsupported state database version %d", version)
 	}
 	return tx.Commit()
 }
@@ -456,6 +464,56 @@ func (s *Store) ActiveContexts() (map[int64]string, error) {
 		result[chatID] = name
 	}
 	return result, rows.Err()
+}
+
+// Session returns a chat's OpenCode session for a repository.
+func (s *Store) Session(chatID int64, repoName string) (string, error) {
+	var sessionID string
+	err := s.db.QueryRow(`SELECT session_id FROM sessions WHERE chat_id = ? AND repo_name = ?`,
+		chatID, repoName).Scan(&sessionID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return sessionID, err
+}
+
+// SetSession stores a chat's OpenCode session for a repository.
+func (s *Store) SetSession(chatID int64, repoName, sessionID string) error {
+	_, err := s.db.Exec(`INSERT INTO sessions (chat_id, repo_name, session_id) VALUES (?, ?, ?)
+		ON CONFLICT(chat_id, repo_name) DO UPDATE SET session_id = excluded.session_id`,
+		chatID, repoName, sessionID)
+	return err
+}
+
+// ForgetSession removes a chat's OpenCode session for a repository.
+func (s *Store) ForgetSession(chatID int64, repoName string) error {
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE chat_id = ? AND repo_name = ?`, chatID, repoName)
+	return err
+}
+
+// ForgetRepoSessions removes every OpenCode session for a repository.
+func (s *Store) ForgetRepoSessions(repoName string) error {
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE repo_name = ?`, repoName)
+	return err
+}
+
+// ChatHasSessions reports whether a chat has any stored OpenCode sessions.
+func (s *Store) ChatHasSessions(chatID int64) (bool, error) {
+	var exists int
+	err := s.db.QueryRow(`SELECT 1 FROM sessions WHERE chat_id = ? LIMIT 1`, chatID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ForgetChatSessions removes every OpenCode session for a chat.
+func (s *Store) ForgetChatSessions(chatID int64) error {
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE chat_id = ?`, chatID)
+	return err
 }
 
 // CommandSet returns a chat's saved command set.

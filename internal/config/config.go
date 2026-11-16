@@ -18,6 +18,8 @@ const (
 	WorkspaceDir          = "/workspace"
 	UploadDir             = "/upload"
 	MountDir              = "/opt"
+	OpenCodeDataDir       = "/opencode"
+	OpenCodeDBPath        = "/opencode/opencode.db"
 	MaxUploadBytes        = 50 * 1024 * 1024
 	StateVersion          = 4
 	NoActiveRepoMessage   = "No active repository. Use `/create` or `/set` first."

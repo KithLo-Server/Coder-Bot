@@ -275,3 +275,108 @@ func TestConcurrentStores(t *testing.T) {
 		t.Fatalf("count = %d err=%v", count, err)
 	}
 }
+
+func TestSessionsAreScopedAndRemoved(t *testing.T) {
+	store, _ := openStore(t)
+	if err := store.UpsertRepo("a", &Repo{URL: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertRepo("b", &Repo{URL: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		chatID int64
+		repo   string
+		id     string
+	}{
+		{1, "a", "s1"},
+		{2, "a", "s2"},
+		{1, "b", "s3"},
+	} {
+		if err := store.SetSession(entry.chatID, entry.repo, entry.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := store.Session(1, "a"); err != nil || got != "s1" {
+		t.Fatalf("session = %q err=%v", got, err)
+	}
+	if got, err := store.Session(2, "a"); err != nil || got != "s2" {
+		t.Fatalf("session = %q err=%v", got, err)
+	}
+	if ok, err := store.ChatHasSessions(1); err != nil || !ok {
+		t.Fatalf("has sessions = %v err=%v", ok, err)
+	}
+	if err := store.ForgetSession(1, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Session(1, "a"); err != nil || got != "" {
+		t.Fatalf("session = %q err=%v", got, err)
+	}
+	if err := store.ForgetChatSessions(2); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Session(2, "a"); err != nil || got != "" {
+		t.Fatalf("session = %q err=%v", got, err)
+	}
+	if err := store.ForgetRepoSessions("b"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Session(1, "b"); err != nil || got != "" {
+		t.Fatalf("session = %q err=%v", got, err)
+	}
+}
+
+func TestDeleteRepoCascadesSessions(t *testing.T) {
+	store, _ := openStore(t)
+	if err := store.UpsertRepo("a", &Repo{URL: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSession(1, "a", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteRepo("a"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Session(1, "a"); err != nil || got != "" {
+		t.Fatalf("session = %q err=%v", got, err)
+	}
+}
+
+func TestOpenMigratesVersionOneSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := Open(path, catalog(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DROP TABLE sessions`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(path, catalog(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var version int
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("version = %d", version)
+	}
+	if err := store.UpsertRepo("a", &Repo{URL: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSession(1, "a", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Session(1, "a"); err != nil || got != "s1" {
+		t.Fatalf("session = %q err=%v", got, err)
+	}
+}
