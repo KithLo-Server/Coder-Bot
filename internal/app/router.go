@@ -10,6 +10,7 @@ import (
 
 var commandHandlers = map[string]HandlerFunc{
 	"create":    (*App).CmdCreate,
+	"restore":   (*App).CmdRestore,
 	"set":       (*App).CmdSet,
 	"info":      (*App).CmdInfo,
 	"list":      (*App).CmdList,

@@ -234,6 +234,21 @@ func (a *App) recreateRepoContainers(ctx context.Context, name string) (docker.C
 	return worker, nil
 }
 
+func (a *App) applyDefaultModelSelection(repo *state.Repo) {
+	if a.Cfg.Catalog.Entry(repo.Model) == nil {
+		repo.Model = a.Cfg.Catalog.DefaultID
+		repo.Variant = a.Cfg.Catalog.DefaultVariant
+		repo.VariantSet = true
+	} else if !repo.VariantSet {
+		repo.VariantSet = true
+		if repo.Model == a.Cfg.Catalog.DefaultID {
+			repo.Variant = a.Cfg.Catalog.DefaultVariant
+		} else {
+			repo.Variant = nil
+		}
+	}
+}
+
 type setupFailure struct {
 	message string
 }
@@ -316,18 +331,7 @@ func (a *App) setupRepo(ctx context.Context, status *telegram.Message, name, rem
 		existing = &copy
 	}
 	delete(existing.Extra, "commands")
-	if a.Cfg.Catalog.Entry(existing.Model) == nil {
-		existing.Model = a.Cfg.Catalog.DefaultID
-		existing.Variant = a.Cfg.Catalog.DefaultVariant
-		existing.VariantSet = true
-	} else if !existing.VariantSet {
-		existing.VariantSet = true
-		if existing.Model == a.Cfg.Catalog.DefaultID {
-			existing.Variant = a.Cfg.Catalog.DefaultVariant
-		} else {
-			existing.Variant = nil
-		}
-	}
+	a.applyDefaultModelSelection(existing)
 	existing.URL = remoteURL
 	existing.ContainerID = ""
 	existing.ShellContainerID = ""
@@ -382,6 +386,86 @@ func (a *App) CmdCreate(ctx context.Context, update *telegram.Update, args []str
 		state = "updated"
 	}
 	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` %s and set as active context! Containers will start on first use.\nModel configured: `%s`", name, state, a.ModelForRepo(name)))
+	return nil
+}
+
+// CmdRestore implements /restore.
+func (a *App) CmdRestore(ctx context.Context, update *telegram.Update, args []string) error {
+	if !a.Authorized(update) {
+		return nil
+	}
+	if len(args) == 0 {
+		_, err := a.replyMarkdown(ctx, update, "Usage: `/restore {name}`")
+		return err
+	}
+	name := strings.TrimSpace(args[0])
+	workspacePath, valid := a.safeWorkspacePath(name)
+	if !valid {
+		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Invalid repository name `%s`.", name))
+		return err
+	}
+	if a.RepoExists(name) {
+		_, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Repository `%s` is already configured. Use `/set` or `/reload`.", name))
+		return err
+	}
+	status, err := a.replyMarkdown(ctx, update, fmt.Sprintf("Restoring `%s`...", name))
+	if err != nil {
+		return err
+	}
+	lockCtx, release, err := a.Locks.Acquire(ctx, name)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if a.RepoExists(name) {
+		a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` is already configured. Use `/set` or `/reload`.", name))
+		return nil
+	}
+	baseContainer := a.BaseContainer()
+	workspace, err := InspectWorkspace(lockCtx, baseContainer, workspacePath)
+	if err != nil {
+		a.editStatus(lockCtx, status, fmt.Sprintf("Could not inspect `%s`: `%v`", workspacePath, err))
+		return nil
+	}
+	problem := ""
+	switch workspace {
+	case "git":
+	case "missing":
+		problem = fmt.Sprintf("No checkout named `%s` exists in `%s`. Use `/create` instead.", name, a.Cfg.ReposDir)
+	case "empty":
+		problem = fmt.Sprintf("Directory `%s` is empty; nothing to restore.", workspacePath)
+	case "not-dir":
+		problem = fmt.Sprintf("`%s` exists and is not a directory.", workspacePath)
+	case "non-git":
+		problem = fmt.Sprintf("Directory `%s` is not a git repository; refusing to restore `%s`.", workspacePath, name)
+	case "git-locked":
+		problem = fmt.Sprintf("`%s` has a stale `index.lock` (another git process may be running). Refusing to restore `%s`.", workspacePath, name)
+	default:
+		problem = fmt.Sprintf("Directory `%s` is not a git repository; refusing to restore `%s`.", workspacePath, name)
+	}
+	if problem != "" {
+		a.editStatus(lockCtx, status, problem)
+		return nil
+	}
+	remoteResult, _ := RunGit(lockCtx, baseContainer, workspacePath, []string{"config", "--get", "remote.origin.url"}, nil)
+	remoteURL := strings.TrimSpace(string(remoteResult.Output))
+	if remoteResult.ExitCode != 0 || remoteURL == "" {
+		a.editStatus(lockCtx, status, fmt.Sprintf("Existing directory `%s` is a git repository without an `origin` remote. Refusing to restore `%s`.", name, name))
+		return nil
+	}
+	repo := &state.Repo{URL: remoteURL}
+	a.applyDefaultModelSelection(repo)
+	if err := a.SetRepo(name, repo); err != nil {
+		a.editStatus(lockCtx, status, fmt.Sprintf("Could not save repository `%s`: `%v`", name, err))
+		return nil
+	}
+	chatID, _ := messageTarget(update)
+	a.RemovePendingPlanButton(lockCtx, chatID)
+	if err := a.SetActiveContext(chatID, name); err != nil {
+		return err
+	}
+	a.editStatus(lockCtx, status, fmt.Sprintf("Repository `%s` restored from `%s` and set as active context!\nRemote URL: %s\nModel configured: `%s`",
+		name, workspacePath, remoteURL, a.ModelForRepo(name)))
 	return nil
 }
 

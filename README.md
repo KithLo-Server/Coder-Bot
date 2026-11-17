@@ -154,13 +154,14 @@ The worker and shell images are fixed:
 | Command | Description |
 | --- | --- |
 | `/create <name> <git-url>` | Clone a repository in the base container (or adopt an existing matching checkout) and make it active. Its worker and shell containers start on first use. |
+| `/restore <name>` | Recreate bot state for a checkout that already exists under `$REPOS_DIR` (using its `origin` remote) and make it active, without cloning or pulling. |
 | `/set <name>` | Select an existing repository as the chat's active context. |
 | `/info` | Show the active repository, worker and shell status, and model. |
 | `/list` | List configured repositories and mark the active one. |
 | `/mount <name>` | Mount another configured repository's checkout at `/opt/<name>` in the active repository's worker and shell. |
 | `/unmount <name>` | Remove a repository previously mounted with `/mount` from the active worker and shell. |
 | `/stop <name>` | Stop and remove the repository's worker and shell containers, keeping its bot state, OpenCode sessions, and checkout on disk. |
-| `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously stopped or purged repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). |
+| `/purge <name>` | Delete the repository's checkout from disk using the base container, including checkouts of previously stopped or purged repos (refused if changes are not pushed, no remote can be verified, or the checkout is not a git repository). Use `/restore` to re-adopt a checkout that is still on disk. |
 | `/reload <name>` | Stop and remove the worker and shell, refresh the checkout with a fast-forward pull in the base, and keep its OpenCode sessions. Containers start again on first use. |
 | `/reloadall` | Stop and remove the containers and refresh the checkout of every repository, keeping their OpenCode sessions. Containers start again on first use. |
 | `/upgrade` | Pull the latest worker and shell images, replace containers still running older images while keeping their OpenCode sessions, then prune unused old images. |

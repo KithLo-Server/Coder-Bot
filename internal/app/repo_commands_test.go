@@ -519,3 +519,94 @@ func TestGetContainersCreatesMissingOnDemand(t *testing.T) {
 		t.Fatalf("worker volumes = %+v", workerRun.Volumes)
 	}
 }
+
+func TestRestoreAdoptsExistingCheckout(t *testing.T) {
+	env := newTestEnv(t)
+	env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+		switch {
+		case inspectScript(options):
+			return docker.ExecResult{Output: []byte("git\n")}, nil
+		case gitScript(options) && strings.Contains(options.Cmd[2], "remote.origin.url"):
+			return docker.ExecResult{Output: []byte("https://example.com/restored\n")}, nil
+		}
+		return docker.ExecResult{}, nil
+	}
+	if err := env.app.CmdRestore(env.ctx, env.message("/restore restored", 1), []string{"restored"}); err != nil {
+		t.Fatal(err)
+	}
+	repo, ok := env.app.Repo("restored")
+	if !ok {
+		t.Fatal("repo should be restored")
+	}
+	if repo.URL != "https://example.com/restored" {
+		t.Fatalf("url = %q", repo.URL)
+	}
+	if repo.Model != "m1" || repo.Variant == nil || *repo.Variant != "low" {
+		t.Fatalf("model selection = %q/%v", repo.Model, repo.Variant)
+	}
+	if repo.ContainerID != "" || repo.ShellContainerID != "" {
+		t.Fatalf("container ids = %q/%q", repo.ContainerID, repo.ShellContainerID)
+	}
+	if env.app.ActiveRepo(1) != "restored" {
+		t.Fatal("repo should be active")
+	}
+	if len(env.docker.runCalls) != 0 {
+		t.Fatalf("run calls = %d", len(env.docker.runCalls))
+	}
+	if last := env.tg.edits[len(env.tg.edits)-1].Text; !strings.Contains(last, "restored") {
+		t.Fatalf("edits = %+v", env.tg.edits)
+	}
+}
+
+func TestRestoreRefusesInvalidCheckout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  string
+		remote  docker.ExecResult
+		message string
+	}{
+		{"missing", "missing", docker.ExecResult{}, "No checkout named"},
+		{"empty", "empty", docker.ExecResult{}, "is empty"},
+		{"non-git", "non-git", docker.ExecResult{}, "not a git repository"},
+		{"locked", "git-locked", docker.ExecResult{}, "index.lock"},
+		{"no-remote", "git", docker.ExecResult{ExitCode: 1}, "without an `origin` remote"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			env.base.execFunc = func(options docker.ExecOptions) (docker.ExecResult, error) {
+				switch {
+				case inspectScript(options):
+					return docker.ExecResult{Output: []byte(tc.status + "\n")}, nil
+				case gitScript(options) && strings.Contains(options.Cmd[2], "remote.origin.url"):
+					return tc.remote, nil
+				}
+				return docker.ExecResult{}, nil
+			}
+			if err := env.app.CmdRestore(env.ctx, env.message("/restore repo", 1), []string{"repo"}); err != nil {
+				t.Fatal(err)
+			}
+			if env.app.RepoExists("repo") {
+				t.Fatal("invalid checkout must not be restored")
+			}
+			if last := env.tg.edits[len(env.tg.edits)-1].Text; !strings.Contains(last, tc.message) {
+				t.Fatalf("message = %q", last)
+			}
+			if len(env.docker.runCalls) != 0 {
+				t.Fatalf("run calls = %d", len(env.docker.runCalls))
+			}
+		})
+	}
+}
+
+func TestRestoreRejectsConfiguredAndUnsafeNames(t *testing.T) {
+	env := newTestEnv(t)
+	env.addRepo("repo")
+	env.app.CmdRestore(env.ctx, env.message("/restore repo", 1), []string{"repo"})
+	if last := env.tg.messages[len(env.tg.messages)-1].Text; !strings.Contains(last, "already configured") {
+		t.Fatalf("messages = %+v", env.tg.messages)
+	}
+	env.app.CmdRestore(env.ctx, env.message("/restore ../bad", 1), []string{"../bad"})
+	if last := env.tg.messages[len(env.tg.messages)-1].Text; !strings.Contains(last, "Invalid repository name") {
+		t.Fatalf("messages = %+v", env.tg.messages)
+	}
+}

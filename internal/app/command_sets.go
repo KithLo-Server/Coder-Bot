@@ -24,6 +24,7 @@ var BotCommands map[string]HandlerFunc
 func init() {
 	BotCommands = map[string]HandlerFunc{
 		"create":    (*App).CmdCreate,
+		"restore":   (*App).CmdRestore,
 		"set":       (*App).CmdSet,
 		"info":      (*App).CmdInfo,
 		"list":      (*App).CmdList,
